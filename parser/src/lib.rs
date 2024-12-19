@@ -897,7 +897,7 @@ impl<'a> Parser<'a> {
         output_queue: &[QueueItem], 
         on_type: Option<&Type>, 
         context: &mut Context<'a>,
-    ) -> Result<Expression, ParserError<'a>> {
+    ) -> Result<Option<Expression>, ParserError<'a>> {
         let mut collapse_queue: Vec<Expression> = Vec::new();
 
         let mut base_type: Type = Type::Any;
@@ -962,7 +962,7 @@ impl<'a> Parser<'a> {
         });
     
         // Return the fully collapsed queue
-        Ok(collapse_queue.first().expect("Invalid Postfix Expression")).cloned()
+        Ok(collapse_queue.first().cloned())
     }
 
     // Read an expression with default parameters
@@ -1244,7 +1244,7 @@ impl<'a> Parser<'a> {
                             context,
                         )?;
 
-                        if let ref shunt_expr = collapsed_expr {
+                        if let Some(ref shunt_expr) = collapsed_expr {
                             if *self.get_type_from_expression(on_type, &shunt_expr, context)? != Type::Bool {
                                 return Err(err!(self, ParserErrorKind::InvalidCondition(Type::Bool, shunt_expr.clone())))
                             }
@@ -1266,7 +1266,7 @@ impl<'a> Parser<'a> {
                         }
                         required_operator = !required_operator;
 
-                        let val = if let shunt_expr = collapsed_expr {
+                        let val = if let Some(shunt_expr) = collapsed_expr {
                             Expression::Ternary(Box::new(shunt_expr.clone()), Box::new(valid_expr), Box::new(else_expr))
                         } else {
                             Expression::Ternary(Box::new(expr), Box::new(valid_expr), Box::new(else_expr))
@@ -1373,7 +1373,7 @@ impl<'a> Parser<'a> {
             self.advance()?;
         };
 
-        if let expr = collapsed_expr {
+        if let Some(expr) = collapsed_expr {
             trace!("final shunted result: {:?}", expr);
             return Ok(expr.clone());
         } else {
