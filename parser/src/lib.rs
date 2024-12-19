@@ -522,7 +522,12 @@ impl<'a> Parser<'a> {
 
         self.expect_token(Token::ParenthesisClose)?;
 
-        Ok(Expression::FunctionCall(path.map(Box::new), id, parameters))
+        // Slixe, please let me know if the below demonstrates a lack of understanding of your design
+        // previously, shunting yard processing made naively-taken expressions show up here before
+        match path {
+            Some(Expression::Path(ref _a, ref _b)) => Ok(Expression::FunctionCall(path.map(Box::new), id, parameters)),
+            _ => Ok(Expression::FunctionCall(None, id, parameters)),
+        }
     }
 
     // Read fields of a constructor with the following syntax:
@@ -951,7 +956,7 @@ impl<'a> Parser<'a> {
             }).is_some()
         {
             let token = self.advance()?;
-            println!("token: {:?}", token);
+            // println!("token: {:?}", token);
 
             let expr = match token {
                 Token::BracketOpen => {
@@ -1026,15 +1031,20 @@ impl<'a> Parser<'a> {
                     continue;
                 },
                 Token::Identifier(id) => {
+                    trace!("identified {}", id);
+                    
                     match self.peek() {
                         // function call
                         Ok(Token::ParenthesisOpen) => {
-                            let prev_expr = match queue.pop() {
-                                Some(QueueItem::Expression(v)) => Some(v),
-                                None => None,
-                                _ => return Err(err!(self, ParserErrorKind::InvalidOperation))
-                            };
-                            self.read_function_call(prev_expr, on_type, id, context)?
+                          let val = self.read_function_call(last_expression.take(), on_type, id, context)?;
+                          output_queue.push(QueueItem::Expression(val.clone()));
+                          println!("function = {:?}", val);
+                          val
+                        },
+                        Ok(Token::Colon) => {
+                          let val = self.read_type_constant(Token::Identifier(id), context)?;
+                          output_queue.push(QueueItem::Expression(val.clone()));
+                          val
                         },
                         Ok(Token::Colon) => self.read_type_constant(Token::Identifier(id), context)?,
                         _ => {
@@ -1163,8 +1173,13 @@ impl<'a> Parser<'a> {
                     Expression::IsNot(Box::new(expr))
                 },
                 Token::OperatorTernary => {
-                    if queue.is_empty() {
-                        return Err(err!(self, ParserErrorKind::InvalidTernaryNoPreviousExpression));
+                    if output_queue.len() > 0 || last_expression.is_some() {
+                        // The below is OK because it will only be referenced if last_expression
+                        // is something anyway
+                        let expr = match last_expression {
+                            Some(expression) => expression,
+                            None => Expression::Constant(Constant::Default(xelis_types::Value::U64(0))),
+                        };
 
                     }
 
@@ -1172,28 +1187,32 @@ impl<'a> Parser<'a> {
                         .chain(operator_stack.drain(..)
                         .map(|v| QueueItem::Operator(v)));
 
-                    let collapsed_expr = self.try_postfix_collapse(
-                        queue,
-                        context,
-                    )?;
+                        let valid_expr = self.read_expr(Some(&Token::Colon), on_type, true, true, expected_type, context)?;
+                        let first_type = self.get_type_from_expression(on_type, &valid_expr, context)?.into_owned();
 
-                    if *self.get_type_from_expression(on_type, &collapsed_expr, context)? != Type::Bool {
-                        return Err(err!(self, ParserErrorKind::InvalidCondition(Type::Bool, collapsed_expr)))
+                        self.expect_token(Token::Colon)?;
+                        let else_expr = self.read_expr(None, on_type, true, true, expected_type, context)?;
+                        let else_type = self.get_type_from_expression(on_type, &else_expr, context)?;
+                        
+                        if first_type != *else_type { // both expr should have the SAME type.
+                            return Err(err!(self, ParserErrorKind::InvalidValueType(else_type.into_owned(), first_type)))
+                        }
+                        required_operator = !required_operator;
+
+                        let val = if let Some(QueueItem::Expression(shunt_expr)) = collapsed_queue.first() {
+                            Expression::Ternary(Box::new(shunt_expr.clone()), Box::new(valid_expr), Box::new(else_expr))
+                        } else {
+                            Expression::Ternary(Box::new(expr), Box::new(valid_expr), Box::new(else_expr))
+                        };
+
+                        output_queue.clear();
+                        operator_stack.clear();
+
+                        output_queue.push(QueueItem::Expression(val.clone()));
+                        val
+                    } else {
+                        return Err(err!(self, ParserErrorKind::InvalidTernaryNoPreviousExpression))
                     }
-
-                    let valid_expr = self.read_expr(Some(&Token::Colon), None, true, true, expected_type, context)?;
-                    let first_type = self.get_type_from_expression(None, &valid_expr, context)?.into_owned();
-
-                    self.expect_token(Token::Colon)?;
-                    let else_expr = self.read_expr(None, on_type, true, true, expected_type, context)?;
-                    let else_type = self.get_type_from_expression(None, &else_expr, context)?;
-                    
-                    if first_type != *else_type { // both expr should have the SAME type.
-                        return Err(err!(self, ParserErrorKind::InvalidValueType(else_type.into_owned(), first_type)))
-                    }
-                    required_operator = !required_operator;
-
-                    Expression::Ternary(Box::new(collapsed_expr), Box::new(valid_expr), Box::new(else_expr))
                 },
                 Token::As => {
                     let prev_expr = match queue.pop() {
@@ -1264,9 +1283,12 @@ impl<'a> Parser<'a> {
             required_operator = !required_operator;
         }
 
-        let queue = queue.into_iter()
-            .chain(operator_stack.drain(..)
-            .map(|v| QueueItem::Operator(v)));
+        // Collapse remaining operators in the stack
+        while let Some(top_op) = operator_stack.pop() {
+            output_queue.push(QueueItem::Token(top_op.to_token()));
+        }
+
+        // trace_postfix(&output_queue);
 
         // Process the postfix arithmetic that was generated
         let mut collapsed_expr = self.try_postfix_collapse(
