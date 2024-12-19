@@ -121,6 +121,15 @@ impl<'a> Function<'a> {
     }
 }
 
+fn trace_postfix(output_queue: &Vec<QueueItem>) {
+    let postfix: Vec<String> = output_queue.iter().map(|item| match item {
+        QueueItem::Expression(expr) => format!("{:?}", expr), // Customize the format for Expression
+        QueueItem::Operator(op) => format!("{}", op.to_token()),       // Customize the format for Operator
+        QueueItem::Token(token) => format!("{}", token),       // Customize the format for Token
+    }).collect();
+    println!("Postfix Expression: {}", postfix.join(" "));
+}
+
 pub struct Parser<'a> {
     // Tokens to process
     tokens: VecDeque<TokenResult<'a>>,
@@ -942,7 +951,7 @@ impl<'a> Parser<'a> {
             }).is_some()
         {
             let token = self.advance()?;
-            trace!("token: {:?}", token);
+            println!("token: {:?}", token);
 
             let expr = match token {
                 Token::BracketOpen => {
@@ -972,7 +981,9 @@ impl<'a> Parser<'a> {
                             }
 
                             required_operator = !required_operator;
-                            expr
+                            let val = Expression::ArrayCall(Box::new(v), Box::new(index));
+                            output_queue.push(QueueItem::Expression(val.clone()));
+                            val
                         },
                         None => { // require at least one value in a array constructor
                             let mut elements: Vec<Expression> = Vec::new();
@@ -1033,17 +1044,31 @@ impl<'a> Parser<'a> {
                                     if let Type::Struct(_type) = t {
                                         let builder = self.global_mapper.structs().get_by_ref(_type)
                                             .map_err(|e| err!(self, e.into()))?;
-                                        let id = builder.get_id_for_field(id)
-                                            .ok_or_else(|| err!(self, ParserErrorKind::UnexpectedVariable(id)))?;
+                                        match builder.get_id_for_field(id) {
+                                            Some(v) => {
+                                              let val = Expression::Variable(v);
 
-                                        Expression::Variable(id)
+                                              // wait for the next loop iteration to parse array references
+                                              if self.peek_is_not(Token::BracketOpen) {
+                                                  output_queue.push(QueueItem::Expression(val.clone()));  
+                                              }
+                                              val
+                                            },
+                                            None => return Err(err!(self, ParserErrorKind::UnexpectedVariable(id)))
+                                        }
                                     } else {
                                         return Err(err!(self, ParserErrorKind::UnexpectedType(t.clone())))
                                     }
                                 },
                                 None => {
                                     if let Some(num_id) = context.get_variable_id(id) {
-                                        Expression::Variable(num_id)
+                                        let val = Expression::Variable(num_id);
+
+                                        // wait for the next loop iteration to parse array references
+                                        if self.peek_is_not(Token::BracketOpen) {
+                                            output_queue.push(QueueItem::Expression(val.clone()));  
+                                        }
+                                        val
                                     } else if let Some(constant) = self.constants.get(id) {
                                         Expression::Constant(constant.value.clone())
                                     } else if let Ok(builder) = self.global_mapper.structs().get_by_name(&id) {
@@ -1113,7 +1138,15 @@ impl<'a> Parser<'a> {
 
                                     Expression::FunctionCall(Some(Box::new(value)), name, params)
                                 } else {
-                                    Expression::Path(Box::new(value), Box::new(right_expr))
+                                    let val = Expression::Path(Box::new(value), Box::new(right_expr));
+                                    output_queue.pop();
+
+                                    // wait for the next loop iteration to parse array references
+                                    if self.peek_is_not(Token::BracketOpen) {
+                                        output_queue.push(QueueItem::Expression(val.clone()));  
+                                    }
+
+                                    val
                                 }
                             }
                         },
