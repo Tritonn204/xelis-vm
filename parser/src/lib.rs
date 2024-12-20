@@ -893,7 +893,15 @@ impl<'a> Parser<'a> {
             // println!("reached level {}", { level += 1; level });
             match item {
                 QueueItem::Expression(expr) => {
-                    collapse_queue.push(Cow::Borrowed(expr));
+                    let result_expr = if expr.is_collapsible_in_parser() {
+                        self.try_convert_expr_to_value(&mut expr.to_owned())
+                            .map(Expression::Constant)
+                            .unwrap_or(expr.to_owned())
+                    } else { 
+                        expr.to_owned() 
+                    };
+
+                    collapse_queue.push(Cow::Owned(result_expr));
                 }
                 QueueItem::Operator(op) => {
                     let (mut right, mut left) = match (collapse_queue.pop(), collapse_queue.pop()) {
