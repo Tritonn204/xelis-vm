@@ -1799,6 +1799,10 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::BraceOpen)?;
 
         let mut statements: Vec<Statement> = Vec::new();
+        let mut pattern_conditions: Vec<Expression> = [Expression::Constant(
+            Primitive::Boolean(true).into()
+        )].to_vec();
+
         let builder = self.global_mapper.structs().get_by_ref(&inner)
             .map_err(|e| err!(self, e.into()))?.to_owned();
 
@@ -1826,11 +1830,20 @@ impl<'a> Parser<'a> {
                     let dec = Statement::Variable(self.inject_variable(
                         id,
                         types[field_id].clone(),
-                        left,
+                        left.clone(),
                         context
                     )?);
 
                     statements.push(dec);
+
+                    if *self.peek()? == Token::Colon {
+                        self.advance()?;
+                        let value = self.read_expression_delimited(&Token::Comma, context)?;
+
+                        pattern_conditions.push(
+                            Expression::Operator(Operator::Eq, Box::new(left), Box::new(value))
+                        );
+                    }
                 },
                 Token::Comma => {},
                 Token::BraceClose => {
@@ -1849,11 +1862,17 @@ impl<'a> Parser<'a> {
                 let mut body = self.read_body(context, return_type)?;
                 bodies.push(body);
 
-                conditions.push(
-                    Expression::Constant(
-                        Primitive::Boolean(true).into()
-                    )
-                );
+                let combined = pattern_conditions
+                    .into_iter()
+                    .reduce(|lhs, rhs| {
+                        Expression::Operator(
+                            Operator::And,
+                            Box::new(lhs),
+                            Box::new(rhs),
+                        )
+                    });
+
+                conditions.push(combined.unwrap());
             },
             Token::If => {
                 let condition = self.read_expression_delimited(&Token::FatArrow, context)?;
@@ -1865,7 +1884,17 @@ impl<'a> Parser<'a> {
                 self.expect_token(Token::FatArrow)?;
                 self.expect_token(Token::BraceOpen)?;
 
-                conditions.push(condition);
+                let combined = pattern_conditions
+                    .into_iter()
+                    .fold(condition, |acc, next| {
+                        Expression::Operator(
+                            Operator::And,
+                            Box::new(acc),
+                            Box::new(next),
+                        )
+                    });
+
+                conditions.push(combined);
                 let mut body = self.read_body(context, return_type)?;
                 bodies.push(body);
             },
