@@ -1846,10 +1846,8 @@ impl<'a> Parser<'a> {
 
         match token {
             Token::FatArrow => {
-                self.expect_token(Token::BraceOpen);
                 let mut body = self.read_body(context, return_type)?;
                 bodies.push(body);
-                self.expect_token(Token::BraceClose);
 
                 conditions.push(
                     Expression::Constant(
@@ -1858,14 +1856,16 @@ impl<'a> Parser<'a> {
                 );
             },
             Token::If => {
-                let condition = self.read_expression(context)?;
+                let condition = self.read_expression_delimited(&Token::FatArrow, context)?;
                 let condition_type = self.get_type_from_expression(None, &condition, context)?;
                 if *condition_type != Type::Bool {
                     return Err(err!(self, ParserErrorKind::InvalidCondition(condition_type.into_owned(), condition)))
                 }
 
+                self.expect_token(Token::FatArrow)?;
+                self.expect_token(Token::BraceOpen)?;
+
                 conditions.push(condition);
-                self.expect_token(Token::BraceOpen);
                 let mut body = self.read_body(context, return_type)?;
                 bodies.push(body);
             },
@@ -2033,9 +2033,13 @@ impl<'a> Parser<'a> {
                                         }
                                     }
                                     context.end_scope();
-                                    println!("AFTER PEEK");
-                                    match self.peek()? {
-                                        Token::Comma => { self.advance()?; continue; },
+                                    let token = self.peek()?;
+                                    println!("peek token: {:?}", token);
+                                    match token {
+                                        Token::Comma | Token::BraceClose => { self.advance()?; continue; },
+                                        Token::BraceOpen => {
+                                            return Err(err!(self, ParserErrorKind::InvalidToken(token.to_owned(), Token::Comma)));
+                                        },
                                         _ => { break; }
                                     }
                                 }
