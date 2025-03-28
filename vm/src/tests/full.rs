@@ -653,6 +653,10 @@ fn test_match() {
                 { age: 10 as u8, male } => {
                     println("GOLDEN CHILD")
                     return age as u64
+                },
+                { age } => {
+                    println("OTHER MINOR")
+                    return age as u64
                 }
             }
             return 0
@@ -661,7 +665,10 @@ fn test_match() {
         entry main() {
             let val: TestStruct = TestStruct { age: 22, male: false }
             let val2: TestStruct = TestStruct { age: 10, male: false }
+            let val3: TestStruct = TestStruct { age: 15, male: true }
+
             println(extract_1(val))
+            println(extract_1(val3))
             return extract_1(val2)
         }
     "#;
