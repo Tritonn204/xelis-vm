@@ -642,8 +642,12 @@ fn test_match() {
         fn extract_1(t: TestStruct) -> u64 {
             let x: u8 = t.age
             match t {
+                { age, male } if (age >= 21 && male == false) => {
+                    println("ADULT FEMALE")
+                    return age as u64
+                },
                 { age, male } if (age >= 21) => {
-                    println("ADULT")
+                    println("ADULT MALE")
                     return age as u64
                 },
                 { age, male } => {
