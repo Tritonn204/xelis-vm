@@ -626,6 +626,49 @@ fn test_enum() {
 }
 
 #[test]
+fn test_match() {
+    let code = r#"
+        enum TestEnum {
+            A,
+            B { value: u64 },
+            C
+        }
+
+        struct TestStruct {
+            age: u8,
+            male: bool
+        }
+
+        fn extract_1(t: TestStruct) -> u64 {
+            let x: u8 = t.age
+            match t {
+                { age, male } if (age >= 21) => {
+                    println("ADULT")
+                    return age as u64
+                },
+                { age, male } => {
+                    println("MINOR")
+                    return age as u64
+                }
+            }
+            return 0
+        }
+
+        entry main() {
+            let val: TestStruct = TestStruct { age: 22, male: false }
+            let val2: TestStruct = TestStruct { age: 10, male: false }
+            println(extract_1(val))
+            return extract_1(val2)
+        }
+    "#;
+
+    assert_eq!(
+        run_code_id(code, 1),
+        Primitive::U64(10)
+    );
+}
+
+#[test]
 fn test_array_slice() {
     // Slice copy the array
     let code = r#"

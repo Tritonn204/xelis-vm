@@ -408,6 +408,7 @@ impl<'a> Parser<'a> {
             Expression::EnumConstructor(_, _type) => Cow::Owned(Type::Enum(_type.enum_type().clone())),
             Expression::Variable(ref var_name) => match on_type {
                 Some(t) => {
+                    println!("type for {:?}", var_name);
                     if let Type::Struct(_type) = t {
                         let index = *var_name as usize;
                         if let Some(field_type) = _type.fields().get(index) {
@@ -1007,6 +1008,58 @@ impl<'a> Parser<'a> {
         self.read_expr(Some(delimiter), None, true, true, None, context)
     }
 
+    // Encapsulation here will enable a lot of cleanup for the import PR
+    fn parse_identifier(
+        &mut self,
+        id: &'a str,
+        on_type: Option<&Type>,
+        context: &mut Context<'a>,
+        queue: &mut Vec<QueueItem>
+    ) -> Result<Expression, ParserError<'a>> {
+        match self.peek() {
+            // function call
+            Ok(Token::ParenthesisOpen) => {
+                let prev_expr = match queue.pop() {
+                    Some(QueueItem::Expression(v)) => Some(v),
+                    None | Some(QueueItem::Separator) => None,
+                    _ => return Err(err!(self, ParserErrorKind::InvalidOperation))
+                };
+                self.read_function_call(prev_expr, on_type.is_some(), on_type, id, context)
+            },
+            Ok(Token::Colon) if matches!(self.peek_n(1), Ok(Token::Colon)) => self.read_type_constant(Token::Identifier(id), context),
+            _ => {
+                match on_type {
+                    Some(t) => {
+                        if let Type::Struct(_type) = t {
+                            let builder = self.global_mapper.structs()
+                                .get_by_ref(_type)
+                                .map_err(|e| err!(self, e.into()))?;
+                            let id = builder.get_id_for_field(id)
+                                .ok_or_else(|| err!(self, ParserErrorKind::UnexpectedVariable(id)))?;
+
+                            Ok(Expression::Variable(id))
+                        } else {
+                            return Err(err!(self, ParserErrorKind::UnexpectedType(t.clone())))
+                        }
+                    },
+                    None => {
+                        if let Some(num_id) = context.get_variable_id(id) {
+                            Ok(Expression::Variable(num_id))
+                        } else if let Some(constant) = self.constants.get(id) {
+                            Ok(Expression::Constant(constant.value.clone()))
+                        } else if let Ok(builder) = self.global_mapper.structs().get_by_name(&id) {
+                            self.read_struct_constructor(builder.get_type().clone(), context)
+                        } else if let Ok(builder) = self.global_mapper.enums().get_by_name(&id) {
+                            self.read_enum_variant_constructor(builder.get_type().clone(), id, context)
+                        } else {
+                            return Err(err!(self, ParserErrorKind::UnexpectedVariable(id)))
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
     // Read an expression with the possibility to accept operators
     // number_type is used to force the type of a number
     fn read_expr(
@@ -1123,49 +1176,7 @@ impl<'a> Parser<'a> {
                     continue;
                 },
                 Token::Identifier(id) => {
-                    match self.peek() {
-                        // function call
-                        Ok(Token::ParenthesisOpen) => {
-                            let prev_expr = match queue.pop() {
-                                Some(QueueItem::Expression(v)) => Some(v),
-                                None | Some(QueueItem::Separator) => None,
-                                _ => return Err(err!(self, ParserErrorKind::InvalidOperation))
-                            };
-                            self.read_function_call(prev_expr, on_type.is_some(), on_type, id, context)?
-                        },
-                        Ok(Token::Colon) if matches!(self.peek_n(1), Ok(Token::Colon)) => self.read_type_constant(Token::Identifier(id), context)?,
-                        _ => {
-                            match on_type {
-                                // mostly an access to a struct field
-                                Some(t) => {
-                                    if let Type::Struct(_type) = t {
-                                        let builder = self.global_mapper.structs()
-                                            .get_by_ref(_type)
-                                            .map_err(|e| err!(self, e.into()))?;
-                                        let id = builder.get_id_for_field(id)
-                                            .ok_or_else(|| err!(self, ParserErrorKind::UnexpectedVariable(id)))?;
-
-                                        Expression::Variable(id)
-                                    } else {
-                                        return Err(err!(self, ParserErrorKind::UnexpectedType(t.clone())))
-                                    }
-                                },
-                                None => {
-                                    if let Some(num_id) = context.get_variable_id(id) {
-                                        Expression::Variable(num_id)
-                                    } else if let Some(constant) = self.constants.get(id) {
-                                        Expression::Constant(constant.value.clone())
-                                    } else if let Ok(builder) = self.global_mapper.structs().get_by_name(&id) {
-                                        self.read_struct_constructor(builder.get_type().clone(), context)?
-                                    } else if let Ok(builder) = self.global_mapper.enums().get_by_name(&id) {
-                                        self.read_enum_variant_constructor(builder.get_type().clone(), id, context)?
-                                    } else {
-                                        return Err(err!(self, ParserErrorKind::UnexpectedVariable(id)))
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    self.parse_identifier(id, on_type, context, &mut queue)?
                 },
                 Token::Value(value) => Expression::Constant(
                     Constant::Default(match value {
@@ -1222,6 +1233,9 @@ impl<'a> Parser<'a> {
 
                                     Expression::FunctionCall(Some(Box::new(value)), name, params)
                                 } else {
+                                    println!("struct read: {:?}",
+                                        Expression::Path(Box::new(value.clone()), Box::new(right_expr.clone()))
+                                    );
                                     Expression::Path(Box::new(value), Box::new(right_expr))
                                 }
                             }
@@ -1620,6 +1634,27 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn inject_variable(
+        &mut self, 
+        name: &'a str, 
+        value_type: Type, 
+        value: Expression, 
+        context: &mut Context<'a>
+    ) -> Result<DeclarationStatement, ParserError<'a>> {
+        let id = if self.disable_shadowing_variables {
+            context.register_variable(name, value_type.clone())
+                .ok_or_else(|| err!(self, ParserErrorKind::VariableNameAlreadyUsed(name)))?
+        } else {
+            context.register_variable_unchecked(name, value_type.clone())
+        };
+
+        Ok(DeclarationStatement {
+            id,
+            value_type,
+            value
+        })
+    }
+
     // Read a constant declaration
     fn read_const(&mut self, context: &mut Context<'a>) -> Result<(), ParserError<'a>> {
         let (name, value_type, mut value) = self.read_variable_internal(context, true)?;
@@ -1646,8 +1681,202 @@ impl<'a> Parser<'a> {
         Ok(statements)
     }
 
+    fn match_enum(
+        &mut self, 
+        inner: &EnumType,
+        context: &mut Context<'a>,
+        return_type: &Option<Type>,
+        conditions: &mut Vec<Expression>,
+        bodies: &mut Vec<Vec<Statement>>
+    ) -> Result<(), ParserError<'a>>  {
+        match self.peek()? {
+            Token::Identifier(id) => {
+                let mut peeker = 0;
+                let mut final_id: &str = "";
+
+                loop {
+                    match self.peek_n(peeker)? {
+                        Token::FatArrow => {
+                            if let Token::Identifier(id) = self.peek_n(peeker-1)? {
+                                if peeker > 2 &&
+                                    *self.peek_n(peeker-2)? == Token::Colon &&
+                                    *self.peek_n(peeker-3)? == Token::Colon 
+                                {
+                                    final_id = id;
+                                }
+                                println!("peeker: {:?}", peeker);
+                            }
+                            for i in 0..peeker {
+                                self.advance()?;
+                            }
+                            break;
+                        },
+                        Token::BraceOpen => {
+                            if let Token::Identifier(id) = self.peek_n(peeker-1)? {
+                                if peeker > 2 &&
+                                    *self.peek_n(peeker-2)? == Token::Colon &&
+                                    *self.peek_n(peeker-3)? == Token::Colon 
+                                {
+                                    final_id = id;
+                                }
+                                println!("peeker: {:?}", peeker);
+                            }
+                            for i in 0..peeker {
+                                self.advance()?;
+                            }
+                            break;
+                        },
+                        _ => {}
+                    }
+                    peeker+=1;
+                }
+
+                println!("Enum final id: {:?}", final_id);
+
+                let (variant_id, variant_fields) = {
+                    let builder = self.global_mapper.enums()
+                        .get_by_ref(&inner)
+                        .map_err(|e| err!(self, e.into()))?;
+                    match builder.get_variant_by_name(final_id) {
+                        Some((variant_id, variant_fields)) => {
+                            (variant_id, variant_fields)
+                        },
+                        None => {
+                            (255, &Vec::new())
+                        }
+                    }
+                };
+
+                if variant_id == 255 {
+
+                } else {
+                    println!("Found Variant: {:?}", variant_id);
+                    
+                    // TODO: grab active enum variant for the instance variable
+                    // from the runtime env, to apply in this condition with
+                    // variant pattern matching
+
+                    conditions.push(
+                        Expression::Constant(
+                            Primitive::Boolean(true).into()
+                        )
+                    );
+
+                    match self.peek()? {
+                        Token::FatArrow => {
+                            self.advance()?;
+                            // println!("read");
+                            bodies.push(self.read_body(context, return_type)?);
+                            // println!("after read");
+                        },
+                        Token::BraceOpen => {
+                            todo!();
+                        },
+                        _ => {}
+                    }
+                }
+                
+                Ok(())
+            },
+            var => {
+                return Err(err!(self, ParserErrorKind::UnknownError));
+            }
+        }
+    }
+
+    fn match_struct(
+        &mut self,
+        var_id: String,
+        inner: &StructType,
+        context: &mut Context<'a>,
+        return_type: &Option<Type>,
+        conditions: &mut Vec<Expression>,
+        bodies: &mut Vec<Vec<Statement>>
+    ) -> Result<Vec<Statement>, ParserError<'a>>  {
+        self.expect_token(Token::BraceOpen)?;
+
+        let mut statements: Vec<Statement> = Vec::new();
+        let builder = self.global_mapper.structs().get_by_ref(&inner)
+            .map_err(|e| err!(self, e.into()))?.to_owned();
+
+        let types = builder.get_type().fields();
+        // println!("types = {:?}", types);
+        // println!("struct fields: {:?}",  builder.names());
+
+        loop {
+            let token = self.advance()?;
+
+            match token {
+                Token::Identifier(id) => {
+                    let field_id_opt = builder.names().iter().position(|x| *x == id);
+                    if field_id_opt.is_none() {
+                        return Err(err!(self, ParserErrorKind::UnexpectedVariable(id)));
+                    }
+
+                    let field_id = field_id_opt.unwrap();
+
+                    let left = Expression::Path(
+                        Box::new(Expression::Variable(context.get_variable_id(&var_id).unwrap())), 
+                        Box::new(Expression::Variable(field_id as u16))
+                    );
+
+                    let dec = Statement::Variable(self.inject_variable(
+                        id,
+                        types[field_id].clone(),
+                        left,
+                        context
+                    )?);
+
+                    statements.push(dec);
+                },
+                Token::Comma => {},
+                Token::BraceClose => {
+                    break;
+                }
+                _ => {
+                    return Err(err!(self, ParserErrorKind::UnexpectedToken(token)));
+                }
+            }
+        }
+
+        let token = self.advance()?;
+
+        match token {
+            Token::FatArrow => {
+                self.expect_token(Token::BraceOpen);
+                let mut body = self.read_body(context, return_type)?;
+                bodies.push(body);
+                self.expect_token(Token::BraceClose);
+
+                conditions.push(
+                    Expression::Constant(
+                        Primitive::Boolean(true).into()
+                    )
+                );
+            },
+            Token::If => {
+                let condition = self.read_expression(context)?;
+                let condition_type = self.get_type_from_expression(None, &condition, context)?;
+                if *condition_type != Type::Bool {
+                    return Err(err!(self, ParserErrorKind::InvalidCondition(condition_type.into_owned(), condition)))
+                }
+
+                conditions.push(condition);
+                self.expect_token(Token::BraceOpen);
+                let mut body = self.read_body(context, return_type)?;
+                bodies.push(body);
+            },
+            _ => {
+                return Err(err!(self, ParserErrorKind::UnexpectedToken(token)));
+            }
+        }
+
+        Ok(statements)
+    }
+
     // Read a single statement
     fn read_statement(&mut self, context: &mut Context<'a>, return_type: &Option<Type>) -> Result<Option<Statement>, ParserError<'a>> {
+        if *self.peek()? == Token::Comma { return Ok(None) };
         if let Some(token) = self.next() {
             trace!("statement token: {:?}", token);
             let statement: Statement = match token {
@@ -1725,11 +1954,93 @@ impl<'a> Parser<'a> {
                         None
                     };
 
-                    Statement::If(condition, body, else_statement)
+                    let res = Statement::If(condition, body, else_statement);
+                    println!("if result: {:?}", res);
+                    res
+                },
+                Token::Match => {
+                    let id_string = if let Token::Identifier(id) = self.peek()? {
+                        id.to_string()
+                    } else {
+                        return Err(err!(self, ParserErrorKind::ExpectedIdentifierToken(self.peek()?.clone())));
+                    };
+                    match self.peek()? {
+                        Token::Identifier(id) => {
+                            let instance = self.read_expression(context)?;
+                            let mut conditions: Vec<Expression> = Vec::new();
+                            let mut bodies: Vec<Vec<Statement>> = Vec::new();
+
+                            println!("instance = {:?}", instance);
+
+                            let focus_type = self.get_type_from_expression_internal(
+                                None, &instance, context
+                            )?.unwrap().into_owned();
+
+                            let mut statements: Vec<Statement> = Vec::new();
+
+                            if focus_type.is_enum() || focus_type.is_struct() || focus_type.is_primitive() {
+                                println!("VALID MATCH CALL ON {:?}", focus_type);
+                                println!("return type is {:?}", return_type);
+                                self.expect_token(Token::BraceOpen)?;
+
+                                loop {
+                                    context.begin_scope();
+                                    match self.get_type_from_expression_internal(
+                                        None, &instance, context
+                                    )?.unwrap().into_owned() {
+                                        Type::Enum(inner) => {
+                                            self.match_enum(&inner, context, return_type, &mut conditions, &mut bodies)?;
+                                        },
+                                        Type::Struct(inner) => {
+                                            statements.append(
+                                                &mut self.match_struct(id_string.clone(), &inner, context, return_type, &mut conditions, &mut bodies)?
+                                            );
+                                        }
+                                        p if p.is_primitive() => {
+                                            self.advance()?;
+                                            if p.is_number() {
+                                                
+                                            } else {
+                                                
+                                            }
+                                        }
+                                        ty => {
+                                            println!("BAD MATCH CALL");
+                                            return Err(err!(self, ParserErrorKind::UnexpectedType(ty)));
+                                        }
+                                    }
+                                    context.end_scope();
+                                    println!("AFTER PEEK");
+                                    match self.peek()? {
+                                        Token::Comma => { self.advance()?; continue; },
+                                        _ => { break; }
+                                    }
+                                }
+                            }
+                            
+                            let mut current: Option<Statement> = None;
+
+                            // Can throw a warning about unused match arms if desired here,
+                            // detection isn't complicated
+                            for (cond, body) in conditions.into_iter().zip(bodies).rev() {
+                                current = Some(Statement::If(cond, body, current.map(|stmt| vec![stmt])));
+                            }
+
+                            println!("match statement resulted in {:?}", current);
+                            statements.push(current.unwrap());
+
+                            println!("full run = {:?}", statements);
+                            Statement::Scope(statements)
+                        },
+                        to => {
+                            return Err(err!(self, ParserErrorKind::ExpectedIdentifierToken(to.clone())))
+                        }
+                    }
                 },
                 Token::BraceOpen => Statement::Scope(self.read_body(context, return_type)?),
                 Token::Let => Statement::Variable(self.read_variable(context)?),
                 Token::Return => {
+                    println!("FOUND RETURN");
                     let opt: Option<Expression> = if let Some(return_type) = return_type {
                         let expr = self.read_expr(None, None, true, true, Some(return_type), context)?;
                         if let Some(expr_type) = self.get_type_from_expression_internal(None, &expr, context)? {
