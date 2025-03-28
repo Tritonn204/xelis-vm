@@ -1756,6 +1756,9 @@ impl<'a> Parser<'a> {
                     // from the runtime env, to apply in this condition with
                     // variant pattern matching
 
+                    // Also, add field declaration/detection in-scope similar to
+                    // the struct implementation
+
                     conditions.push(
                         Expression::Constant(
                             Primitive::Boolean(true).into()
@@ -1872,6 +1875,26 @@ impl<'a> Parser<'a> {
         }
 
         Ok(statements)
+    }
+
+    fn match_string(
+        &mut self,
+        context: &mut Context<'a>,
+        return_type: &Option<Type>,
+        conditions: &mut Vec<Expression>,
+        bodies: &mut Vec<Vec<Statement>>
+    ) -> Result<Vec<Statement>, ParserError<'a>>  {
+        todo!();
+    }
+
+    fn match_number(
+        &mut self,
+        context: &mut Context<'a>,
+        return_type: &Option<Type>,
+        conditions: &mut Vec<Expression>,
+        bodies: &mut Vec<Vec<Statement>>
+    ) -> Result<Vec<Statement>, ParserError<'a>>  {
+        todo!();
     }
 
     // Read a single statement

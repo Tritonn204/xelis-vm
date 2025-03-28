@@ -646,7 +646,7 @@ fn test_match() {
                     println("ADULT FEMALE")
                     return age as u64
                 },
-                { age, male } if (age >= 21) => {
+                { age } if (age >= 21) => {
                     println("ADULT MALE")
                     return age as u64
                 },
