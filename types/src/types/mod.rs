@@ -14,6 +14,7 @@ use std::{fmt, hash::{Hash, Hasher}};
 #[derive(Clone, Hash, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value")]
 #[serde(rename_all = "snake_case")]
+
 pub enum Type {
     // Any Type is accepted
     Any,
@@ -39,6 +40,7 @@ pub enum Type {
 
     Struct(StructType),
     Enum(EnumType),
+    EnumValue(EnumType, u8),
     Opaque(OpaqueType),
 }
 
@@ -122,7 +124,7 @@ impl Type {
             },
             Constant::Bytes(_) => Type::Bytes,
             Constant::Typed(_, ty) => match ty {
-                DefinedType::Enum(ty) => Type::Enum(ty.enum_type().clone()),
+                DefinedType::Enum(ty) => Type::EnumValue(ty.enum_type().clone(), ty.variant_id()),
                 DefinedType::Struct(ty) => Type::Struct(ty.clone())
             }
         })
@@ -199,7 +201,7 @@ impl Type {
     // check if the type is an enum
     pub fn is_enum(&self) -> bool {
         match self {
-            Type::Enum(_) => true,
+            Type::Enum(_) | Type::EnumValue(_, _) => true,
             _ => false
         }
     }
@@ -253,6 +255,16 @@ impl Type {
             },
             Type::Enum(e) => match self {
                 Type::Enum(e2) => e == e2,
+                Type::EnumValue(e2, _) => {
+                    e == e2
+                },
+                _ => self.is_generic() || other.is_compatible_with(self)
+            },
+            Type::EnumValue(e, _) => match self {
+                Type::Enum(e2) => e == e2,
+                Type::EnumValue(e2, _) => {
+                    e == e2
+                },
                 _ => self.is_generic() || other.is_compatible_with(self)
             },
             Type::Struct(a) => match self {
@@ -412,6 +424,7 @@ impl fmt::Display for Type {
             Type::Range(_type) => write!(f, "range<{}>", _type),
             Type::Map(key, value) => write!(f, "map<{}, {}>", key, value),
             Type::Enum(id) => write!(f, "enum({:?})", id),
+            Type::EnumValue(id, variant) => write!(f, "enum[{:?}]({:?})", id, variant),
             Type::Opaque(id) => write!(f, "opaque({:?})", id),
         }
     }

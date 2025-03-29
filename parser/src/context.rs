@@ -1,4 +1,5 @@
 use xelis_types::{IdentifierType, Type};
+use xelis_ast::Expression;
 
 #[derive(Clone, Debug)]
 pub struct Context<'a> {

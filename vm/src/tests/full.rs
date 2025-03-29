@@ -606,7 +606,7 @@ fn test_self_reference_map() {
 }
 
 #[test]
-fn test_enum() {
+fn test_enum_access() {
     let code = r#"
         enum Test {
             A,
@@ -615,7 +615,7 @@ fn test_enum() {
 
         entry main() {
             let x: Test = Test::B { value: 10 };
-            return 10
+            return x.value
         }
     "#;
 
@@ -662,20 +662,47 @@ fn test_match() {
             return 0
         }
 
+        fn extract_2(t: TestEnum) -> u64 {
+            println(t)
+            match t {
+                TestEnum::A => {
+                    println("HEY YOU")
+                    return 10
+                }
+                // TestEnum::B { value } => {
+                //     return 20
+                // }
+            }
+            return 0
+        }
+
         entry main() {
             let val: TestStruct = TestStruct { age: 22, male: false }
             let val2: TestStruct = TestStruct { age: 10, male: false }
             let val3: TestStruct = TestStruct { age: 15, male: true }
 
-            println(extract_1(val))
-            println(extract_1(val3))
-            return extract_1(val2)
+            let val10: TestEnum = TestEnum::B { value: 20 }
+            let val11: TestEnum = TestEnum::A
+
+            let res: u64 = 0
+            res += (extract_1(val) == 22) as u64
+            res += (extract_1(val3) == 15) as u64
+            res += (extract_1(val2) == 10) as u64
+
+            return res
+        }
+
+        entry ambiguous() {
+            let val10: TestEnum = TestEnum::B { value: 20 }
+            debug(val10)
+            extract_2(val10)
+            return 0
         }
     "#;
 
     assert_eq!(
-        run_code_id(code, 1),
-        Primitive::U64(10)
+        run_code_id(code, 3),
+        Primitive::U64(0)
     );
 }
 
