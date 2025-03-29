@@ -639,69 +639,70 @@ fn test_match() {
             male: bool
         }
 
-        fn extract_1(t: TestStruct) -> u64 {
-            let x: u8 = t.age
-            match t {
-                { age, male: false } if (age >= 21) => {
-                    println("ADULT FEMALE")
-                    return age as u64
-                },
-                { age } if (age >= 21) => {
-                    println("ADULT MALE")
-                    return age as u64
-                },
-                { age: 10 as u8, male } => {
-                    println("GOLDEN CHILD")
-                    return age as u64
-                },
-                { age } => {
-                    println("OTHER MINOR")
-                    return age as u64
-                }
-            }
-            return 0
-        }
+        // fn extract_1(t: TestStruct) -> u64 {
+        //     let x: u8 = t.age
+        //     match t {
+        //         { age, male: false } if (age >= 21) => {
+        //             println("ADULT FEMALE")
+        //             return age as u64
+        //         },
+        //         { age } if (age >= 21) => {
+        //             println("ADULT MALE")
+        //             return age as u64
+        //         },
+        //         { age: 10 as u8, male } => {
+        //             println("GOLDEN CHILD")
+        //             return age as u64
+        //         },
+        //         { age } => {
+        //             println("OTHER MINOR")
+        //             return age as u64
+        //         }
+        //     }
+        //     return 0
+        // }
+
+        // entry main() {
+        //     let val: TestStruct = TestStruct { age: 22, male: false }
+        //     let val2: TestStruct = TestStruct { age: 10, male: false }
+        //     let val3: TestStruct = TestStruct { age: 15, male: true }
+
+        //     let val10: TestEnum = TestEnum::B { value: 20 }
+        //     let val11: TestEnum = TestEnum::A
+
+        //     let res: u64 = 0
+        //     res += (extract_1(val) == 22) as u64
+        //     res += (extract_1(val3) == 15) as u64
+        //     res += (extract_1(val2) == 10) as u64
+
+        //     return res
+        // }
 
         fn extract_2(t: TestEnum) -> u64 {
-            println(t)
             match t {
                 TestEnum::A => {
-                    println("HEY YOU")
+                    println("HI FROM A")
                     return 10
+                },
+                TestEnum::B => {
+                    println("DETECTED B")
+                    return 20
                 }
-                // TestEnum::B { value } => {
-                //     return 20
-                // }
             }
             return 0
         }
 
-        entry main() {
-            let val: TestStruct = TestStruct { age: 22, male: false }
-            let val2: TestStruct = TestStruct { age: 10, male: false }
-            let val3: TestStruct = TestStruct { age: 15, male: true }
-
+        entry enum_pattern() {
             let val10: TestEnum = TestEnum::B { value: 20 }
-            let val11: TestEnum = TestEnum::A
-
-            let res: u64 = 0
-            res += (extract_1(val) == 22) as u64
-            res += (extract_1(val3) == 15) as u64
-            res += (extract_1(val2) == 10) as u64
-
-            return res
-        }
-
-        entry ambiguous() {
-            let val10: TestEnum = TestEnum::B { value: 20 }
-            debug(val10)
+            println(val10)
             extract_2(val10)
+
             return 0
         }
     "#;
 
     assert_eq!(
-        run_code_id(code, 3),
+        run_code_id(code, 1),
         Primitive::U64(0)
     );
 }

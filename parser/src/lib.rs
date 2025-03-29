@@ -405,22 +405,13 @@ impl<'a> Parser<'a> {
             },
             Expression::ForceType(_, ty) => Cow::Borrowed(ty),
             Expression::MapConstructor(_, key_type, value_type) => Cow::Owned(Type::Map(Box::new(key_type.clone()), Box::new(value_type.clone()))),
-            Expression::EnumConstructor(_, _type) => Cow::Owned(Type::EnumValue(_type.enum_type().clone(), _type.variant_id())),
+            Expression::EnumConstructor(_, _type) => Cow::Owned(Type::Enum(_type.enum_type().clone())),
             Expression::Variable(ref var_name) => match on_type {
                 Some(t) => {
                     match t {
                         Type::Struct(_type) => {
                             let index = *var_name as usize;
                             if let Some(field_type) = _type.fields().get(index) {
-                                Cow::Owned(field_type.clone())
-                            } else {
-                                return Err(err!(self, ParserErrorKind::UnexpectedMappedVariableId(var_name.clone())))
-                            }
-                        },
-                        Type::EnumValue(_type, vid) => {
-                            let index = *var_name as usize;
-                            
-                            if let Some(field_type) = _type.get_variant(*vid).unwrap().fields().get(index) {
                                 Cow::Owned(field_type.clone())
                             } else {
                                 return Err(err!(self, ParserErrorKind::UnexpectedMappedVariableId(var_name.clone())))
@@ -549,7 +540,6 @@ impl<'a> Parser<'a> {
             }
         }
 
-        println!("params parsed to {:?}", (parameters.clone(), types.clone()));
 
         self.expect_token(Token::ParenthesisClose)?;
         Ok((parameters, types))
@@ -571,6 +561,8 @@ impl<'a> Parser<'a> {
         if f.is_entry() {
             return Err(err!(self, ParserErrorKind::FunctionIsEntry))
         }
+
+        println!("params parsed to {:?}", parameters.clone());
 
         Ok(Expression::FunctionCall(path.map(Box::new), id, parameters))
     }
@@ -867,12 +859,19 @@ impl<'a> Parser<'a> {
                 Constant::Typed(new_fields, DefinedType::Struct(struct_type.clone()))
             },
             Expression::EnumConstructor(fields, enum_type) => {
-                let mut new_fields = Vec::with_capacity(fields.len());
+                let mut new_fields = Vec::with_capacity(fields.len() + 1);
+
+                // store enum variant id as the first value in the register
+                new_fields.push(
+                    Primitive::U8(enum_type.variant_id()).into()
+                );
+
                 for field in fields {
                     let v = self.try_convert_expr_to_value(field)?;
                     *field = Expression::Constant(v.clone());
                     new_fields.push(v);
                 }
+
                 Constant::Typed(new_fields, DefinedType::Enum(enum_type.clone()))
             },
             Expression::MapConstructor(entries, _, _) => {
@@ -1057,19 +1056,6 @@ impl<'a> Parser<'a> {
 
                                 Ok(Expression::Variable(id))
                             },
-                            // Type::EnumValue(_type, variant_id) => {
-                            //     let builder = self.global_mapper.enums()
-                            //         .get_by_ref(_type)
-                            //         .map_err(|e| err!(self, e.into()))?;
-                            //     let fields = builder.get_variant_by_id(*variant_id)
-                            //         .ok_or_else(|| err!(self, ParserErrorKind::UnknownError))?;
-                            //     let idx = fields.iter()
-                            //         .position(|s| s.0 == id)
-                            //         .ok_or_else(|| err!(self, ParserErrorKind::UnknownError))?; // TODO: Make a field not found error
-
-                            //     println!("Enum field id: {:?}", idx);
-                            //     Ok(Expression::Variable(idx as u16))
-                            // },
                             _ => {
                                 return Err(err!(self, ParserErrorKind::UnexpectedType(t.clone())))
                             }
@@ -1665,10 +1651,7 @@ impl<'a> Parser<'a> {
         } else {
             context.register_variable_unchecked(name, value_type.clone())
         };
-
-        println!("Value Type for {:?}: {:?}", name, value_type);
-        println!("Value for {:?}: {:?}", name, value);
-
+        
         Ok(DeclarationStatement {
             id,
             value_type,
@@ -1725,15 +1708,13 @@ impl<'a> Parser<'a> {
 
     fn match_enum(
         &mut self, 
-        var_name: String,
         mut instance: Expression,
         inner: &EnumType,
-        inner_variant_id: u8,
         context: &mut Context<'a>,
         return_type: &Option<Type>,
         conditions: &mut Vec<Expression>,
         bodies: &mut Vec<Vec<Statement>>
-    ) -> Result<(), ParserError<'a>>  {
+    ) -> Result<Vec<Statement>, ParserError<'a>>  {
         let mut statements: Vec<Statement> = Vec::new();
         let mut pattern_conditions: Vec<Expression> = [Expression::Constant(
             Primitive::Boolean(true).into()
@@ -1742,15 +1723,12 @@ impl<'a> Parser<'a> {
         let builder = self.global_mapper.enums().get_by_ref(&inner)
             .map_err(|e| err!(self, e.into()))?.to_owned();
 
-        let v_id = context.get_variable_id(&var_name).unwrap();
-        let et = context.get_type_of_variable(&v_id);
-
         println!("builder = {:?}", self.global_mapper.enums());
-        println!("get_variable_type = {:?}", et);
-        println!("enum var name = {:?}", var_name);
 
         let value_test = self.try_convert_expr_to_value(&mut instance);
         println!("test val = {:?}", value_test);
+
+        let instance_box = Box::new(instance);
 
         let token = self.peek()?;
         match token {
@@ -1769,7 +1747,6 @@ impl<'a> Parser<'a> {
                                 {
                                     final_id = id;
                                 }
-                                println!("peeker: {:?}", peeker);
                             }
                             for i in 0..peeker {
                                 self.advance()?;
@@ -1784,7 +1761,6 @@ impl<'a> Parser<'a> {
                                 {
                                     final_id = id;
                                 }
-                                println!("peeker: {:?}", peeker);
                             }
                             for i in 0..peeker {
                                 self.advance()?;
@@ -1799,9 +1775,9 @@ impl<'a> Parser<'a> {
                 println!("Enum final id: {:?}", final_id);
 
                 let (variant_id, variant_fields) = {
-                    let builder = self.global_mapper.enums()
+                    let builder = self.global_mapper.enums_mut()
                         .get_by_ref(&inner)
-                        .map_err(|e| err!(self, e.into()))?;
+                        .map_err(|e| err!(self, e.into()))?.to_owned();
                     match builder.get_variant_by_name(final_id) {
                         Some((variant_id, variant_fields)) => {
                             (variant_id as u16, variant_fields)
@@ -1812,10 +1788,15 @@ impl<'a> Parser<'a> {
                     }
                 };
 
+                let variant_fields_copy: Vec<(String, Type)> = variant_fields
+                    .into_iter()
+                    .map(|(name, type_)| (name.to_string(), type_.clone()))
+                    .collect();
+
                 if variant_id == 256 {
 
                 } else {
-                    println!("Found Variant: {:?}", variant_id);
+                    println!("Found Variant: {:?} / {:?}", variant_id, variant_fields);
                     
                     // TODO: grab active enum variant for the instance variable
                     // from the runtime env, to apply in this condition with
@@ -1824,35 +1805,122 @@ impl<'a> Parser<'a> {
                     // Also, add field declaration/detection in-scope similar to
                     // the struct implementation
 
-                    conditions.push(
-                        // Expression::Constant(
-                        //     Primitive::Boolean(true).into()
-                        // )
-                        // Expression::Operator(Operator::Eq,
-                        //     Box::new(inner_variant_id), 
-                        //     Box::new(Expression::Constant(Primitive::U8(variant_id as u8).into()))
-                        // )
-                        Expression::Operator(Operator::Eq,
-                            Box::new(Expression::Constant(Primitive::U8(inner_variant_id as u8).into())), 
-                            Box::new(Expression::Constant(Primitive::U8(variant_id as u8).into()))
-                        )
+                    let path_expr_inner = Box::new(Expression::Path(
+                        Box::new(Expression::Variable(0)),
+                        Box::new(Expression::Variable(0))
+                    ));
+                    let path_expr = Box::new(Expression::Path(
+                        instance_box.clone(),
+                        Box::new(Expression::Variable(0))
+                    ));
+
+                    let eq_expr = Expression::Operator(Operator::Eq,
+                        path_expr.clone(), 
+                        Box::new(Expression::Constant(Primitive::U8(variant_id as u8).into()))
                     );
 
+                    pattern_conditions.push(eq_expr);
+
                     match self.peek()? {
-                        Token::FatArrow => {
-                            self.advance()?;
-                            // println!("read");
-                            bodies.push(self.read_body(context, return_type)?);
-                            // println!("after read");
-                        },
                         Token::BraceOpen => {
-                            todo!();
+                            loop {
+                                let token = self.advance()?;
+                    
+                                match token {
+                                    Token::Identifier(id) => {
+                                        let field_id_opt = variant_fields_copy.iter().position(|x| x.0 == id);
+                                        if field_id_opt.is_none() {
+                                            return Err(err!(self, ParserErrorKind::UnexpectedVariable(id)));
+                                        }
+                    
+                                        let field_id = field_id_opt.unwrap();
+                    
+                                        let left = Expression::Path(
+                                            instance_box.clone(),
+                                            Box::new(Expression::Variable(field_id as u16 + 1))
+                                        );
+                    
+                                        let dec = Statement::Variable(self.inject_variable(
+                                            id,
+                                            variant_fields_copy[field_id].1.clone(),
+                                            left.clone(),
+                                            context
+                                        )?);
+                    
+                                        statements.push(dec);
+                    
+                                        if *self.peek()? == Token::Colon {
+                                            self.advance()?;
+                                            let value = self.read_expression_delimited(&Token::Comma, context)?;
+                    
+                                            pattern_conditions.push(
+                                                Expression::Operator(Operator::Eq, Box::new(left), Box::new(value))
+                                            );
+                                        }
+                                    },
+                                    Token::Comma => {},
+                                    Token::BraceClose => {
+                                        break;
+                                    }
+                                    _ => {
+                                        return Err(err!(self, ParserErrorKind::UnexpectedToken(token)));
+                                    }
+                                }
+                            }
                         },
                         _ => {}
                     }
+
+                    match self.advance()? {
+                        Token::FatArrow => {
+                            let mut body = self.read_body(context, return_type)?;
+                            bodies.push(body);
+            
+                            let combined = pattern_conditions
+                                .into_iter()
+                                .reduce(|lhs, rhs| {
+                                    Expression::Operator(
+                                        Operator::And,
+                                        Box::new(lhs),
+                                        Box::new(rhs),
+                                    )
+                                });
+            
+                            conditions.push(combined.clone().unwrap());
+
+                            println!("combined: {:?}", combined);
+                        },
+                        Token::If => {
+                            let condition = self.read_expression_delimited(&Token::FatArrow, context)?;
+                            let condition_type = self.get_type_from_expression(None, &condition, context)?;
+                            if *condition_type != Type::Bool {
+                                return Err(err!(self, ParserErrorKind::InvalidCondition(condition_type.into_owned(), condition)))
+                            }
+            
+                            self.expect_token(Token::FatArrow)?;
+                            self.expect_token(Token::BraceOpen)?;
+            
+                            let combined = pattern_conditions
+                                .into_iter()
+                                .fold(condition, |acc, next| {
+                                    Expression::Operator(
+                                        Operator::And,
+                                        Box::new(acc),
+                                        Box::new(next),
+                                    )
+                                });
+            
+                            conditions.push(combined);
+                            let mut body = self.read_body(context, return_type)?;
+                            bodies.push(body);
+                        },
+                        t => {
+                            return Err(err!(self, ParserErrorKind::UnexpectedToken(t)));
+                        }
+                    }
                 }
                 
-                Ok(())
+                Ok(statements)
             },
             var => {
                 println!("WTF");
@@ -2114,9 +2182,11 @@ impl<'a> Parser<'a> {
                                     match self.get_type_from_expression_internal(
                                         None, &instance, context
                                     )?.unwrap().into_owned() {
-                                        Type::EnumValue(inner, vid) => {
+                                        Type::Enum(inner) => {
                                             println!("enum instance: {:?}", instance);
-                                            self.match_enum(id_string.clone(), instance.clone(), &inner, vid, context, return_type, &mut conditions, &mut bodies)?;
+                                            statements.append(
+                                                &mut self.match_enum(instance.clone(), &inner, context, return_type, &mut conditions, &mut bodies)?
+                                            );
                                         },
                                         Type::Struct(inner) => {
                                             statements.append(
@@ -2158,7 +2228,9 @@ impl<'a> Parser<'a> {
                             }
 
                             // println!("match statement resulted in {:?}", current);
-                            statements.push(current.unwrap());
+                            if let Some(s) = current {
+                                statements.push(s)
+                            }
 
                             // println!("full run = {:?}", statements);
                             Statement::Scope(statements)
@@ -2251,11 +2323,6 @@ impl<'a> Parser<'a> {
             self.expect_token(Token::Colon)?;
             let mut value_type = self.read_type()?;
 
-            if let Type::Enum(inner) = value_type {
-                value_type = Type::EnumValue(inner, 0); // placeholder variant
-            }
-
-            println!("Read parameter: `{}: {:?}`", name, value_type);
             parameters.push((name, value_type));
 
             if self.peek_is_not(Token::Comma) {

@@ -130,6 +130,16 @@ impl<'a, T: Builder<'a>> TypeManager<'a, T> {
         self.types.iter().find(|v| v.get_type() == _type).ok_or(BuilderError::StructNotFound)   
     }
 
+    pub fn get_mut_by_ref(&mut self, _type: &T::Type) -> Result<&T, BuilderError> {
+        if let Some(parent) = self.parent {
+            if let Ok(s) = parent.get_by_ref(_type) {
+                return Ok(s);
+            }
+        }
+
+        self.types.iter().find(|v| v.get_type() == _type).ok_or(BuilderError::StructNotFound)   
+    }
+
     pub fn get_name_by_ref(&self, _type: &T::Type) -> Result<&Cow<str>, BuilderError> {
         if let Some(parent) = self.parent {
             if let Ok(s) = parent.get_name_by_ref(_type) {

@@ -198,6 +198,7 @@ impl<'a, 'r> VM<'a, 'r> {
     pub fn run(&mut self) -> Result<ValueCell, VMError> {
         while let Some(mut manager) = self.call_stack.pop() {
             let mut clean_pointers = true;
+
             while let Some(opcode) = manager.next_u8() {
                 match self.backend.table.execute(opcode, &self.backend, &mut self.stack, &mut manager, &mut self.context) {
                     Ok(InstructionResult::Nothing) => {},
@@ -219,6 +220,9 @@ impl<'a, 'r> VM<'a, 'r> {
                         }
 
                         self.invoke_chunk_id(id)?;
+                        println!("current stack: {:?}", self.stack.get_inner().into_iter().map(
+                            |vc| vc.as_ref()?.as_bytes()
+                        ));
                         break;
                     },
                     Ok(InstructionResult::Break) => {
