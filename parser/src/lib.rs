@@ -665,6 +665,7 @@ impl<'a> Parser<'a> {
     // Or if no fields: enum_name::variant_name
     fn read_enum_variant_constructor(&mut self, enum_type: EnumType, variant_name: &'a str, context: &mut Context<'a>) -> Result<Expression, ParserError<'a>> {
         trace!("Read enum variant constructor: {:?}::{}", enum_type, variant_name);
+        println!("Read enum variant constructor: {:?}::{}", enum_type, variant_name);
 
         let (variant_id, has_fields) = {
             let builder = self.global_mapper.enums()
@@ -708,6 +709,7 @@ impl<'a> Parser<'a> {
         } else {
             Vec::new()
         };
+        println!("not the constructor");
 
         Ok(Expression::EnumConstructor(exprs, EnumValueType::new(enum_type, variant_id)))
     }
@@ -1823,6 +1825,7 @@ impl<'a> Parser<'a> {
 
                     match self.peek()? {
                         Token::BraceOpen => {
+                            self.advance()?;
                             loop {
                                 let token = self.advance()?;
                     
@@ -1887,8 +1890,6 @@ impl<'a> Parser<'a> {
                                 });
             
                             conditions.push(combined.clone().unwrap());
-
-                            println!("combined: {:?}", combined);
                         },
                         Token::If => {
                             let condition = self.read_expression_delimited(&Token::FatArrow, context)?;
@@ -1920,6 +1921,7 @@ impl<'a> Parser<'a> {
                     }
                 }
                 
+                println!("statements: {:?}", statements);
                 Ok(statements)
             },
             var => {
@@ -1953,9 +1955,7 @@ impl<'a> Parser<'a> {
         // println!("struct fields: {:?}",  builder.names());
 
         loop {
-            let token = self.advance()?;
-
-            match token {
+            match self.advance()? {
                 Token::Identifier(id) => {
                     let field_id_opt = builder.names().iter().position(|x| *x == id);
                     if field_id_opt.is_none() {
@@ -1991,15 +1991,13 @@ impl<'a> Parser<'a> {
                 Token::BraceClose => {
                     break;
                 }
-                _ => {
-                    return Err(err!(self, ParserErrorKind::UnexpectedToken(token)));
+                t => {
+                    return Err(err!(self, ParserErrorKind::UnexpectedToken(t)));
                 }
             }
         }
 
-        let token = self.advance()?;
-
-        match token {
+        match self.advance()? {
             Token::FatArrow => {
                 let mut body = self.read_body(context, return_type)?;
                 bodies.push(body);
@@ -2040,8 +2038,8 @@ impl<'a> Parser<'a> {
                 let mut body = self.read_body(context, return_type)?;
                 bodies.push(body);
             },
-            _ => {
-                return Err(err!(self, ParserErrorKind::UnexpectedToken(token)));
+            t => {
+                return Err(err!(self, ParserErrorKind::UnexpectedToken(t)));
             }
         }
 
@@ -2070,7 +2068,12 @@ impl<'a> Parser<'a> {
 
     // Read a single statement
     fn read_statement(&mut self, context: &mut Context<'a>, return_type: &Option<Type>) -> Result<Option<Statement>, ParserError<'a>> {
-        if *self.peek()? == Token::Comma { return Ok(None) };
+        match self.peek() {
+            Ok(Token::Comma) => {
+                return Ok(None);
+            },
+            _ => {}
+        }
         if let Some(token) = self.next() {
             trace!("statement token: {:?}", token);
             let statement: Statement = match token {

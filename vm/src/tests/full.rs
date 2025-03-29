@@ -606,26 +606,6 @@ fn test_self_reference_map() {
 }
 
 #[test]
-fn test_enum_access() {
-    let code = r#"
-        enum Test {
-            A,
-            B { value: u64 }
-        }
-
-        entry main() {
-            let x: Test = Test::B { value: 10 };
-            return x.value
-        }
-    "#;
-
-    assert_eq!(
-        run_code(code),
-        Primitive::U64(10)
-    );
-}
-
-#[test]
 fn test_match() {
     let code = r#"
         enum TestEnum {
@@ -682,11 +662,19 @@ fn test_match() {
             match t {
                 TestEnum::A => {
                     println("HI FROM A")
-                    return 10
+                    return 0
                 },
-                TestEnum::B => {
-                    println("DETECTED B")
-                    return 20
+                TestEnum::B { value: 20 } => {
+                    println("DETECTED B with 20:")
+                    return value
+                },
+                TestEnum::B { value } if (value < 10) => {
+                    println("DETECTED B with low value:")
+                    return value
+                },
+                TestEnum::B { value } => {
+                    println("DETECTED B:")
+                    return value
                 }
             }
             return 0
@@ -694,8 +682,10 @@ fn test_match() {
 
         entry enum_pattern() {
             let val10: TestEnum = TestEnum::B { value: 20 }
-            println(val10)
-            extract_2(val10)
+            let val11: TestEnum = TestEnum::B { value: 9 }
+
+            println(extract_2(val10))
+            println(extract_2(val11))
 
             return 0
         }

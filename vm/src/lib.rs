@@ -220,9 +220,6 @@ impl<'a, 'r> VM<'a, 'r> {
                         }
 
                         self.invoke_chunk_id(id)?;
-                        println!("current stack: {:?}", self.stack.get_inner().into_iter().map(
-                            |vc| vc.as_ref()?.as_bytes()
-                        ));
                         break;
                     },
                     Ok(InstructionResult::Break) => {
