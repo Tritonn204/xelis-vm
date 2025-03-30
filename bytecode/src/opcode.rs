@@ -264,7 +264,7 @@ impl OpCode {
             OpCode::Constant => 2, // u16 id
             OpCode::MemoryLoad => 2, // u16 id
             OpCode::MemorySet => 2, // u16 id
-            OpCode::SubLoad => 1, // u8 id
+            OpCode::SubLoad => 2, // u8 id
 
             OpCode::PopN => 1, // u8 count
             OpCode::CopyN => 1, // u8 index

@@ -216,6 +216,20 @@ impl<'a> Compiler<'a> {
                 if let Expression::Variable(id) = right.as_ref() {
                     chunk.emit_opcode(OpCode::SubLoad);
                     chunk.write_u8(*id as u8);
+                    chunk.write_bool(false);
+                    self.decrease_values_on_stack()?;
+                    self.add_value_on_stack(chunk.last_index())?;
+                } else {
+                    return Err(CompilerError::ExpectedVariable);
+                }
+            },
+            Expression::EnumPath(left, right) => {
+                // Compile the path
+                self.compile_expr(chunk, left)?;
+                if let Expression::Variable(id) = right.as_ref() {
+                    chunk.emit_opcode(OpCode::SubLoad);
+                    chunk.write_u8(*id as u8);
+                    chunk.write_bool(true);
                     self.decrease_values_on_stack()?;
                     self.add_value_on_stack(chunk.last_index())?;
                 } else {
@@ -1067,7 +1081,7 @@ mod tests {
                 OpCode::NewObject.as_byte(), 2,
                 OpCode::MemorySet.as_byte(), 0, 0,
                 OpCode::MemoryLoad.as_byte(), 0, 0,
-                OpCode::SubLoad.as_byte(), 0,
+                OpCode::SubLoad.as_byte(), 0, 0,
                 OpCode::Return.as_byte()
             ]
         );
@@ -1086,7 +1100,7 @@ mod tests {
                 // Load struct
                 OpCode::Constant.as_byte(), 0, 0,
                 // New struct
-                OpCode::SubLoad.as_byte(), 0,
+                OpCode::SubLoad.as_byte(), 0, 0,
                 OpCode::Return.as_byte()
             ]
         );

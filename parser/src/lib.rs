@@ -4,7 +4,7 @@ mod mapper;
 
 use std::{
     borrow::Cow,
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     mem
 };
 use error::ParserErrorKind;
@@ -451,6 +451,10 @@ impl<'a> Parser<'a> {
                 let var_type = self.get_type_from_expression(on_type, left, context)?;
                 self.get_type_from_expression(Some(&var_type), right, context)?
             },
+            Expression::EnumPath(left, right) => {
+                let var_type = self.get_type_from_expression(on_type, left, context)?;
+                self.get_type_from_expression(Some(&var_type), right, context)?
+            },
             // Compatibility checks are done when constructing the expression
             Expression::Operator(op, left, right) => match op {
                 // Condition operators
@@ -562,8 +566,6 @@ impl<'a> Parser<'a> {
             return Err(err!(self, ParserErrorKind::FunctionIsEntry))
         }
 
-        println!("params parsed to {:?}", parameters.clone());
-
         Ok(Expression::FunctionCall(path.map(Box::new), id, parameters))
     }
 
@@ -665,7 +667,6 @@ impl<'a> Parser<'a> {
     // Or if no fields: enum_name::variant_name
     fn read_enum_variant_constructor(&mut self, enum_type: EnumType, variant_name: &'a str, context: &mut Context<'a>) -> Result<Expression, ParserError<'a>> {
         trace!("Read enum variant constructor: {:?}::{}", enum_type, variant_name);
-        println!("Read enum variant constructor: {:?}::{}", enum_type, variant_name);
 
         let (variant_id, has_fields) = {
             let builder = self.global_mapper.enums()
@@ -709,7 +710,6 @@ impl<'a> Parser<'a> {
         } else {
             Vec::new()
         };
-        println!("not the constructor");
 
         Ok(Expression::EnumConstructor(exprs, EnumValueType::new(enum_type, variant_id)))
     }
@@ -1246,9 +1246,7 @@ impl<'a> Parser<'a> {
                                 Expression::RangeConstructor(Box::new(value), Box::new(end_expr))
                             } else {
                                 // Read a variable access OR a function call
-                                println!("PROC");
                                 let right_expr = self.read_expr(delimiter, Some(&_type), false, false, expected_type, context)?;
-                                println!("After read");
                                 if let Expression::FunctionCall(path, name, params) = right_expr {
                                     if path.is_some() {
                                         return Err(err!(self, ParserErrorKind::UnexpectedPathInFunctionCall))
@@ -1256,7 +1254,6 @@ impl<'a> Parser<'a> {
 
                                     Expression::FunctionCall(Some(Box::new(value)), name, params)
                                 } else {
-                                    println!("PATH {:?}.{:?}", value.clone(), right_expr.clone());
                                     Expression::Path(Box::new(value), Box::new(right_expr))
                                 }
                             }
@@ -1714,40 +1711,46 @@ impl<'a> Parser<'a> {
         inner: &EnumType,
         context: &mut Context<'a>,
         return_type: &Option<Type>,
-        conditions: &mut Vec<Expression>,
-        bodies: &mut Vec<Vec<Statement>>
+        conditions_map: &mut HashMap<u16, Vec<Expression>>,
+        bodies_map: &mut HashMap<u16, Vec<Vec<Statement>>>
     ) -> Result<Vec<Statement>, ParserError<'a>>  {
         let mut statements: Vec<Statement> = Vec::new();
         let mut pattern_conditions: Vec<Expression> = [Expression::Constant(
             Primitive::Boolean(true).into()
         )].to_vec();
+        let mut base_variant: Option<u8> = None;
 
         let builder = self.global_mapper.enums().get_by_ref(&inner)
             .map_err(|e| err!(self, e.into()))?.to_owned();
 
-        println!("builder = {:?}", self.global_mapper.enums());
-
         let value_test = self.try_convert_expr_to_value(&mut instance);
-        println!("test val = {:?}", value_test);
 
-        let instance_box = Box::new(instance);
+        let instance_box = Box::new(instance.clone());
+        let mut statements_local: Vec<Statement> = Vec::new();
 
         let token = self.peek()?;
         match token {
             Token::Identifier(id) => {
                 let mut peeker = 0;
                 let mut final_id: &str = "";
+                let mut is_generic = false;
 
                 // may want to refactor this to use full namespace parsing
                 loop {
                     match self.peek_n(peeker)? {
                         Token::FatArrow => {
                             if let Token::Identifier(id) = self.peek_n(peeker-1)? {
-                                if peeker > 2 &&
+                                if (peeker > 2 &&
                                     *self.peek_n(peeker-2)? == Token::Colon &&
-                                    *self.peek_n(peeker-3)? == Token::Colon
+                                    *self.peek_n(peeker-3)? == Token::Colon)
                                 {
                                     final_id = id;
+                                } else if peeker == 1 {
+                                    final_id = id;
+                                    is_generic = true; // generic catch-all for enums, must be final pattern if used
+                                } else {
+                                    // TODO: Make invalid match pattern error
+                                    return Err(err!(self, ParserErrorKind::UnknownError));
                                 }
                             }
                             for i in 0..peeker {
@@ -1774,158 +1777,163 @@ impl<'a> Parser<'a> {
                     peeker+=1;
                 }
 
-                println!("Enum final id: {:?}", final_id);
-
-                let (variant_id, variant_fields) = {
-                    let builder = self.global_mapper.enums_mut()
-                        .get_by_ref(&inner)
-                        .map_err(|e| err!(self, e.into()))?.to_owned();
-                    match builder.get_variant_by_name(final_id) {
-                        Some((variant_id, variant_fields)) => {
-                            (variant_id as u16, variant_fields)
-                        },
-                        None => {
-                            (256, &Vec::new())
+                if is_generic == false {
+                    let (variant_id, variant_fields) = {
+                        let builder = self.global_mapper.enums_mut()
+                            .get_by_ref(&inner)
+                            .map_err(|e| err!(self, e.into()))?.to_owned();
+                        match builder.get_variant_by_name(final_id) {
+                            Some((variant_id, variant_fields)) => {
+                                (variant_id as u16, variant_fields)
+                            },
+                            None => {
+                                (256, &Vec::new())
+                            }
                         }
-                    }
-                };
+                    };
 
-                let variant_fields_copy: Vec<(String, Type)> = variant_fields
-                    .into_iter()
-                    .map(|(name, type_)| (name.to_string(), type_.clone()))
-                    .collect();
+                    let variant_fields_copy: Vec<(String, Type)> = variant_fields
+                        .into_iter()
+                        .map(|(name, type_)| (name.to_string(), type_.clone()))
+                        .collect();
 
-                if variant_id == 256 {
+                    if variant_id == 256 {
 
-                } else {
-                    println!("Found Variant: {:?} / {:?}", variant_id, variant_fields);
-                    
-                    // TODO: grab active enum variant for the instance variable
-                    // from the runtime env, to apply in this condition with
-                    // variant pattern matching
+                    } else {
+                        base_variant = Some(variant_id as u8);
 
-                    // Also, add field declaration/detection in-scope similar to
-                    // the struct implementation
-
-                    let path_expr_inner = Box::new(Expression::Path(
-                        Box::new(Expression::Variable(0)),
-                        Box::new(Expression::Variable(0))
-                    ));
-                    let path_expr = Box::new(Expression::Path(
-                        instance_box.clone(),
-                        Box::new(Expression::Variable(0))
-                    ));
-
-                    let eq_expr = Expression::Operator(Operator::Eq,
-                        path_expr.clone(), 
-                        Box::new(Expression::Constant(Primitive::U8(variant_id as u8).into()))
-                    );
-
-                    pattern_conditions.push(eq_expr);
-
-                    match self.peek()? {
-                        Token::BraceOpen => {
-                            self.advance()?;
-                            loop {
-                                let token = self.advance()?;
-                    
-                                match token {
-                                    Token::Identifier(id) => {
-                                        let field_id_opt = variant_fields_copy.iter().position(|x| x.0 == id);
-                                        if field_id_opt.is_none() {
-                                            return Err(err!(self, ParserErrorKind::UnexpectedVariable(id)));
-                                        }
-                    
-                                        let field_id = field_id_opt.unwrap();
-                    
-                                        let left = Expression::Path(
-                                            instance_box.clone(),
-                                            Box::new(Expression::Variable(field_id as u16 + 1))
-                                        );
-                    
-                                        let dec = Statement::Variable(self.inject_variable(
-                                            id,
-                                            variant_fields_copy[field_id].1.clone(),
-                                            left.clone(),
-                                            context
-                                        )?);
-                    
-                                        statements.push(dec);
-                    
-                                        if *self.peek()? == Token::Colon {
-                                            self.advance()?;
-                                            let value = self.read_expression_delimited(&Token::Comma, context)?;
-                    
-                                            pattern_conditions.push(
-                                                Expression::Operator(Operator::Eq, Box::new(left), Box::new(value))
+                        match self.peek()? {
+                            Token::BraceOpen => {
+                                self.advance()?;
+                                loop {
+                                    let token = self.advance()?;
+                        
+                                    match token {
+                                        Token::Identifier(id) => {
+                                            let field_id_opt = variant_fields_copy.iter().position(|x| x.0 == id);
+                                            if field_id_opt.is_none() {
+                                                return Err(err!(self, ParserErrorKind::UnexpectedVariable(id)));
+                                            }
+                        
+                                            let field_id = field_id_opt.unwrap();
+                        
+                                            let left = Expression::EnumPath(
+                                                instance_box.clone(),
+                                                Box::new(Expression::Variable(field_id as u16 + 1))
                                             );
+                        
+                                            let dec = Statement::Variable(self.inject_variable(
+                                                id,
+                                                variant_fields_copy[field_id].1.clone(),
+                                                left.clone(),
+                                                context
+                                            )?);
+                        
+                                            statements.push(dec);
+                        
+                                            if *self.peek()? == Token::Colon {
+                                                self.advance()?;
+                                                let value = self.read_expression_delimited(&Token::Comma, context)?;
+                        
+                                                pattern_conditions.push(
+                                                    Expression::Operator(Operator::Eq, Box::new(left), Box::new(value))
+                                                );
+                                            }
+                                        },
+                                        Token::Comma => {},
+                                        Token::BraceClose => {
+                                            break;
                                         }
-                                    },
-                                    Token::Comma => {},
-                                    Token::BraceClose => {
-                                        break;
-                                    }
-                                    _ => {
-                                        return Err(err!(self, ParserErrorKind::UnexpectedToken(token)));
+                                        _ => {
+                                            return Err(err!(self, ParserErrorKind::UnexpectedToken(token)));
+                                        }
                                     }
                                 }
-                            }
-                        },
-                        _ => {}
-                    }
-
-                    match self.advance()? {
-                        Token::FatArrow => {
-                            let mut body = self.read_body(context, return_type)?;
-                            bodies.push(body);
-            
-                            let combined = pattern_conditions
-                                .into_iter()
-                                .reduce(|lhs, rhs| {
-                                    Expression::Operator(
-                                        Operator::And,
-                                        Box::new(lhs),
-                                        Box::new(rhs),
-                                    )
-                                });
-            
-                            conditions.push(combined.clone().unwrap());
-                        },
-                        Token::If => {
-                            let condition = self.read_expression_delimited(&Token::FatArrow, context)?;
-                            let condition_type = self.get_type_from_expression(None, &condition, context)?;
-                            if *condition_type != Type::Bool {
-                                return Err(err!(self, ParserErrorKind::InvalidCondition(condition_type.into_owned(), condition)))
-                            }
-            
-                            self.expect_token(Token::FatArrow)?;
-                            self.expect_token(Token::BraceOpen)?;
-            
-                            let combined = pattern_conditions
-                                .into_iter()
-                                .fold(condition, |acc, next| {
-                                    Expression::Operator(
-                                        Operator::And,
-                                        Box::new(acc),
-                                        Box::new(next),
-                                    )
-                                });
-            
-                            conditions.push(combined);
-                            let mut body = self.read_body(context, return_type)?;
-                            bodies.push(body);
-                        },
-                        t => {
-                            return Err(err!(self, ParserErrorKind::UnexpectedToken(t)));
+                            },
+                            _ => {}
                         }
+                    }
+                } else {
+                    let dec = Statement::Variable(self.inject_variable(
+                        final_id,
+                        Type::Enum(inner.clone()),
+                        instance.clone(),
+                        context
+                    )?);
+
+                    statements.push(dec);
+                }
+
+                let mut conditions = if let Some(variant_id) = base_variant {
+                    &mut conditions_map
+                        .entry(variant_id as u16)
+                        .or_insert_with(Vec::new)
+                } else {
+                    &mut conditions_map
+                        .entry(256)
+                        .or_insert_with(Vec::new)
+                };
+
+                let mut bodies = if let Some(variant_id) = base_variant {
+                    &mut bodies_map
+                        .entry(variant_id as u16)
+                        .or_insert_with(Vec::new)
+                } else {
+                    &mut bodies_map
+                        .entry(256)
+                        .or_insert_with(Vec::new)
+                };
+
+                match self.advance()? {
+                    Token::FatArrow => {
+                        let mut body = self.read_body(context, return_type)?;
+                        bodies.push(body);
+        
+                        let combined = pattern_conditions
+                            .into_iter()
+                            .reduce(|lhs, rhs| {
+                                Expression::Operator(
+                                    Operator::And,
+                                    Box::new(lhs),
+                                    Box::new(rhs),
+                                )
+                            });
+
+                        conditions.push(combined.expect(""));
+                    },
+                    Token::If => {
+                        let condition = self.read_expression_delimited(&Token::FatArrow, context)?;
+                        let condition_type = self.get_type_from_expression(None, &condition, context)?;
+                        if *condition_type != Type::Bool {
+                            return Err(err!(self, ParserErrorKind::InvalidCondition(condition_type.into_owned(), condition)))
+                        }
+        
+                        self.expect_token(Token::FatArrow)?;
+                        self.expect_token(Token::BraceOpen)?;
+        
+                        let combined = pattern_conditions
+                            .into_iter()
+                            .fold(condition, |acc, next| {
+                                Expression::Operator(
+                                    Operator::And,
+                                    Box::new(acc),
+                                    Box::new(next),
+                                )
+                            });
+        
+                        let mut body = self.read_body(context, return_type)?;
+                        bodies.push(body);
+
+                        conditions.push(combined);
+                    },
+                    t => {
+                        return Err(err!(self, ParserErrorKind::UnexpectedToken(t)));
                     }
                 }
                 
-                println!("statements: {:?}", statements);
                 Ok(statements)
             },
             var => {
-                println!("WTF");
                 return Err(err!(self, ParserErrorKind::UnexpectedToken(var.to_owned())));
             }
         }
@@ -2152,7 +2160,6 @@ impl<'a> Parser<'a> {
                     };
 
                     let res = Statement::If(condition, body, else_statement);
-                    println!("if result: {:?}", res);
                     res
                 },
                 Token::Match => {
@@ -2165,7 +2172,9 @@ impl<'a> Parser<'a> {
                         Token::Identifier(id) => {
                             let instance = self.read_expression(context)?;
                             let mut conditions: Vec<Expression> = Vec::new();
+                            let mut enum_conditions: HashMap<u16, Vec<Expression>> = HashMap::new();
                             let mut bodies: Vec<Vec<Statement>> = Vec::new();
+                            let mut enum_bodies: HashMap<u16, Vec<Vec<Statement>>> = HashMap::new();
 
                             println!("instance = {:?}", instance);
 
@@ -2188,7 +2197,7 @@ impl<'a> Parser<'a> {
                                         Type::Enum(inner) => {
                                             println!("enum instance: {:?}", instance);
                                             statements.append(
-                                                &mut self.match_enum(instance.clone(), &inner, context, return_type, &mut conditions, &mut bodies)?
+                                                &mut self.match_enum(instance.clone(), &inner, context, return_type, &mut enum_conditions, &mut enum_bodies)?
                                             );
                                         },
                                         Type::Struct(inner) => {
@@ -2224,10 +2233,75 @@ impl<'a> Parser<'a> {
                             
                             let mut current: Option<Statement> = None;
 
-                            // Can throw a warning about unused match arms if desired here,
-                            // detection isn't complicated
-                            for (cond, body) in conditions.into_iter().zip(bodies).rev() {
-                                current = Some(Statement::If(cond, body, current.map(|stmt| vec![stmt])));
+                            if focus_type.is_enum() {
+                                let mut variant_ids: Vec<_> = enum_conditions.keys().copied().collect();
+                                variant_ids.sort();
+                                let has_wildcard = variant_ids.contains(&256);
+
+                                let Type::Enum(enum_type) = focus_type else {/*unreachable*/ todo!()};
+
+                                // Remove 256 if present, we’ll handle it last
+                                if has_wildcard {
+                                    variant_ids.retain(|&id| id != 256);
+                                }                                     
+
+                                if let Some(entries) = enum_conditions.remove(&256) {
+                                    let mut variant_count = enum_type.variants().len();
+
+                                    // here until we decide whether to force exhaustive match patterns for enums
+                                    let wildcard_ids: Vec<u16> = (0..variant_count as u16).collect::<Vec<u16>>()
+                                        .into_iter()
+                                        .filter(|id| !variant_ids.contains(id))
+                                        .collect();
+
+                                    // println!("wildcard ids: {:?}", wildcard_ids);
+
+                                    if !wildcard_ids.is_empty() {
+                                        let outer_cond = Expression::Constant(Primitive::Boolean(true).into());
+
+                                        let mut inner_if: Option<Statement> = None;
+                                        for (cond, body) in entries.into_iter().zip(enum_bodies.remove(&256).unwrap_or_default()).rev() {
+                                            inner_if = Some(Statement::If(cond, body, inner_if.map(|stmt| vec![stmt])));
+                                        }
+
+                                        current = Some(Statement::If(
+                                            outer_cond,
+                                            vec![inner_if.expect("Wildcard body is missing")],
+                                            current.map(|stmt| vec![stmt]),
+                                        ));
+                                        // println!("current = {:?}", current);
+                                    }
+                                }  
+
+                                for variant_id in variant_ids.clone().into_iter().rev() {
+                                    if let Some(entries) = enum_conditions.remove(&variant_id) {
+                                        let mut inner_if: Option<Statement> = None;
+                                        for (cond, body) in entries.into_iter().zip(enum_bodies.remove(&variant_id).unwrap_or_default()).rev() {
+                                            inner_if = Some(Statement::If(cond, body, inner_if.map(|stmt| vec![stmt])));
+                                        }
+                                
+                                        if let Some(inner) = inner_if {
+                                            let outer_cond = Expression::Operator(
+                                                Operator::Eq,
+                                                Box::new(Expression::Path(
+                                                    Box::new(instance.clone()),
+                                                    Box::new(Expression::Variable(0)),
+                                                )),
+                                                Box::new(Expression::Constant(Primitive::U8(variant_id as u8).into())),
+                                            );
+                                
+                                            current = Some(Statement::If(outer_cond, vec![inner], current.map(|stmt| vec![stmt])));
+                                        }
+                                    }
+                                }           
+                            }
+
+                            else {
+                                // Can throw a warning about unused match arms if desired here,
+                                // detection isn't complicated
+                                for (cond, body) in conditions.into_iter().zip(bodies).rev() {
+                                    current = Some(Statement::If(cond, body, current.map(|stmt| vec![stmt])));
+                                }
                             }
 
                             // println!("match statement resulted in {:?}", current);
@@ -2246,7 +2320,6 @@ impl<'a> Parser<'a> {
                 Token::BraceOpen => Statement::Scope(self.read_body(context, return_type)?),
                 Token::Let => Statement::Variable(self.read_variable(context)?),
                 Token::Return => {
-                    println!("FOUND RETURN");
                     let opt: Option<Expression> = if let Some(return_type) = return_type {
                         let expr = self.read_expr(None, None, true, true, Some(return_type), context)?;
                         if let Some(expr_type) = self.get_type_from_expression_internal(None, &expr, context)? {

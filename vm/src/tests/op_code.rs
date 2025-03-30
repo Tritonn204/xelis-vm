@@ -221,6 +221,7 @@ fn test_struct() {
     // load first field
     chunk.emit_opcode(OpCode::SubLoad);
     chunk.write_u8(0);
+    chunk.write_bool(false);
 
     // cast first field into u16
     chunk.emit_opcode(OpCode::Cast);
@@ -234,7 +235,7 @@ fn test_struct() {
     // load second field
     chunk.emit_opcode(OpCode::SubLoad);
     chunk.write_u8(1);
-
+    chunk.write_bool(false);
 
     // Sum the two fields
     chunk.emit_opcode(OpCode::Add);
@@ -294,6 +295,7 @@ fn test_function_call_on_value() {
     struct_fn.emit_opcode(OpCode::SubLoad);
     // Read field 0
     struct_fn.write_u8(0);
+    struct_fn.write_bool(false);
 
     // Main function
     let mut main = Chunk::new();

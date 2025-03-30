@@ -27,6 +27,7 @@ Errors occur if the argument count or format is invalid.
 - **Description**: Loads a sub-value using an index.
 - **Arguments**:
   - `index` (integer): The field index of the sub-value.
+  - `from_enum` (bool): Enables an index fallback for enum fields.
 
 #### **POP**
 - **Description**: Removes the top value from the stack.

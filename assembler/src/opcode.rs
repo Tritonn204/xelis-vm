@@ -20,10 +20,12 @@ pub enum OpCodeWithArgs {
         register_index: u16
     },
     // load from stack, load u16, load sub value, push
-    // used as array call and struct field access
+    // used as array call, enum, and struct field access
     SubLoad {
         // Sub index
-        index: u8
+        index: u8,
+        // Enable index fallback for enum fields
+        from_enum: bool
     },
     // pop value from stack only
     Pop,
@@ -260,7 +262,10 @@ impl OpCodeWithArgs {
             OpCodeWithArgs::Constant { index } => chunk.write_u16(*index),
             OpCodeWithArgs::MemoryLoad { register_index } => chunk.write_u16(*register_index),
             OpCodeWithArgs::MemorySet { register_index } => chunk.write_u16(*register_index),
-            OpCodeWithArgs::SubLoad { index } => chunk.write_u8(*index),
+            OpCodeWithArgs::SubLoad { index, from_enum } => {
+                chunk.write_u8(*index);
+                chunk.write_bool(*from_enum);
+            },
             OpCodeWithArgs::PopN { count } => chunk.write_u8(*count),
             OpCodeWithArgs::CopyN { stack_index } => chunk.write_u8(*stack_index),
             OpCodeWithArgs::Swap { stack_index } => chunk.write_u8(*stack_index),
@@ -322,12 +327,13 @@ impl OpCodeWithArgs {
                 }
             }
             "SUBLOAD" => {
-                if args.len() != 1 {
+                if args.len() != 2 {
                     return Err("Invalid args count");
                 }
 
                 OpCodeWithArgs::SubLoad {
-                    index: args[0].parse().map_err(|_| "Invalid index")?
+                    index: args[0].parse().map_err(|_| "Invalid index")?,
+                    from_enum: args[1].parse().map_err(|_| "Invalid from_enum bool")?
                 }
             }
             "POP" => {

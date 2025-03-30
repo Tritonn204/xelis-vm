@@ -16,8 +16,9 @@ pub fn constant<'a>(backend: &Backend<'a>, stack: &mut Stack, manager: &mut Chun
 
 pub fn subload<'a>(_: &Backend<'a>, stack: &mut Stack, manager: &mut ChunkManager<'a>, _: &mut Context<'a, '_>) -> Result<InstructionResult, VMError> {
     let index = manager.read_u8()?;
+    let from_enum = manager.read_bool()?;
     let path = stack.pop_stack()?;
-    let sub = path.get_at_index(index as usize)?;
+    let sub = path.get_at_index(index as usize, from_enum)?;
     stack.push_stack_unchecked(sub);
 
     Ok(InstructionResult::Nothing)
@@ -84,7 +85,7 @@ pub fn array_call<'a>(_: &Backend<'a>, stack: &mut Stack, _: &mut ChunkManager<'
     let value = stack.pop_stack()?;
     let index = value.as_u32()?;
     let value = stack.pop_stack()?;
-    let sub = value.get_at_index(index as usize)?;
+    let sub = value.get_at_index(index as usize, false)?;
 
     let memory_usage = sub.as_ref()?
         .calculate_memory_usage(context.memory_left())?;

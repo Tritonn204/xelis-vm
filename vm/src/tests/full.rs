@@ -675,6 +675,9 @@ fn test_match() {
                 TestEnum::B { value } => {
                     println("DETECTED B:")
                     return value
+                },
+                _ => {
+                    println("OTHER DETECTED")
                 }
             }
             return 0
@@ -683,9 +686,13 @@ fn test_match() {
         entry enum_pattern() {
             let val10: TestEnum = TestEnum::B { value: 20 }
             let val11: TestEnum = TestEnum::B { value: 9 }
+            let val12: TestEnum = TestEnum::A
+            let val13: TestEnum = TestEnum::C
 
             println(extract_2(val10))
             println(extract_2(val11))
+            println(extract_2(val12))
+            println(extract_2(val13))
 
             return 0
         }

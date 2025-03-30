@@ -31,12 +31,27 @@ impl StackValue {
     }
 
     // Get the sub value at index requested
-    pub fn get_at_index(self, index: usize) -> Result<StackValue, ValueError> {
+    
+    // The enum index capping seems very hacky, but this is to get around the fact that unreachable variable
+    // resolution statements in enum matching break if not all enums have the same
+    // amount of variables. With how enums are stored on the stack, index 0
+    // is guaranteed to hold a value, explaining this workaround
+
+    // because the only expression handling that uses this comes from match statements,
+    // we know that out of bounds reads will never "need" to happen anyway, 
+
+    // ideally want a better solution than this
+
+    pub fn get_at_index(self, index: usize, from_enum: bool) -> Result<StackValue, ValueError> {
         match self {
             Self::Owned(mut v) => {
                 let values = v.as_mut_vec()?;
                 let len = values.len();
                 if index >= len {
+                    if from_enum {
+                        let at_index = values.remove(0);
+                        return Ok(Self::Owned(at_index));
+                    }
                     return Err(ValueError::OutOfBounds(index, len))
                 }
 
@@ -48,8 +63,18 @@ impl StackValue {
                     .ok_or(ValueError::InvalidPointer)?;
                 let values = cell.as_mut_vec()?;
                 let len = values.len();
+
+                let safe_index = if from_enum {
+                    if index >= len {
+                        0
+                    } else {
+                        index
+                    }
+                } else {
+                    index
+                };
                 let at_index = values
-                    .get_mut(index)
+                    .get_mut(safe_index)
                     .ok_or_else(|| ValueError::OutOfBounds(index, len))?;
 
                 Ok(Self::Pointer {
