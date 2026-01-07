@@ -983,7 +983,7 @@ impl<'a, M> Parser<'a, M> {
                     return Err(err!(self, ParserErrorKind::InvalidParameterCount { name }))
                 }
 
-                let expr = self.read_expr(Some(&Token::Comma), None, true, true, Some(&next), context)?;
+                let expr = self.read_expr(Some(&Token::Comma), None, true, true, None, Some(&next), context)?;
 
                 let ty = self.get_type_from_expression_internal(None, &expr, context)?
                     .map(|v| v.into_owned());
@@ -1001,7 +1001,7 @@ impl<'a, M> Parser<'a, M> {
             }
         } else {
             while self.peek_is_not(Token::ParenthesisClose) {
-                let expr = self.read_expr(Some(&Token::Comma), on_type, true, true, None, context)?;
+                let expr = self.read_expr(Some(&Token::Comma), on_type, true, true, None, None, context)?;
                 // We are forced to clone the type because we can't borrow it from the expression
                 // I prefer to do this than doing an iteration below
                 let t = self.get_type_from_expression_internal(None, &expr, context)?
@@ -1233,7 +1233,7 @@ impl<'a, M> Parser<'a, M> {
                     },
                     Token::Colon => {
                         self.expect_token(Token::Colon)?;
-                        self.read_expr(None, None, true, true, None, context)?
+                        self.read_expr(None, None, true, true, None, None, context)?
                     },
                     token => return Err(err!(self, ParserErrorKind::UnexpectedToken(token.clone())))
                 };
@@ -1774,17 +1774,17 @@ impl<'a, M> Parser<'a, M> {
 
     // Read an expression with default parameters
     fn read_expression(&mut self, context: &mut Context<'a>) -> Result<Expression, ParserError<'a>> {
-        self.read_expr(None, None, true, true, None, context)
+        self.read_expr(None, None, true, true, None, None, context)
     }
 
     // Read an expression with default parameters
     fn read_expression_expected_type(&mut self, context: &mut Context<'a>, ty: &Type) -> Result<Expression, ParserError<'a>> {
-        self.read_expr(None, None, true, true, Some(ty), context)
+        self.read_expr(None, None, true, true, None, Some(ty), context)
     }
 
     // Read an expression with a delimiter
     fn read_expression_delimited(&mut self, delimiter: &Token, context: &mut Context<'a>) -> Result<Expression, ParserError<'a>> {
-        self.read_expr(Some(delimiter), None, true, true, None, context)
+        self.read_expr(Some(delimiter), None, true, true, None, None, context)
     }
 
     // Read an expression with the possibility to accept operators
@@ -1794,7 +1794,8 @@ impl<'a, M> Parser<'a, M> {
         delimiter: Option<&Token>, 
         on_type: Option<&Type>, 
         allow_ternary: bool, 
-        accept_operator: bool, 
+        accept_operator: bool,
+        operator_exceptions: Option<Vec<&Token>>,
         expected_type: Option<&Type>, 
         context: &mut Context<'a>
     ) -> Result<Expression, ParserError<'a>> {
@@ -1808,6 +1809,9 @@ impl<'a, M> Parser<'a, M> {
         let mut last_assign_operator_stack_size: usize = 0;
 
         let mut required_operator = false;
+
+        let operator_exceptions_values = operator_exceptions.unwrap_or(Vec::new());
+        
         while self.peek()
             .ok()
             .filter(|peek| {
@@ -1821,7 +1825,7 @@ impl<'a, M> Parser<'a, M> {
                     return false
                 }
 
-                if !accept_operator && required_operator {
+                if !accept_operator && required_operator && !operator_exceptions_values.contains(peek) {
                     trace!("not accepting operator");
                     return false
                 }
@@ -1862,7 +1866,7 @@ impl<'a, M> Parser<'a, M> {
                             let mut expr = v;
                             loop {
                                 // Index must be of type u32
-                                let index = self.read_expr(delimiter, None, true, true, Some(&Type::U32), context)?;
+                                let index = self.read_expr(delimiter, None, true, true, None, Some(&Type::U32), context)?;
                                 let index_type = self.get_type_from_expression(None, &index, context)?;
                                 if *index_type != Type::U32 {
                                     return Err(err!(self, ParserErrorKind::InvalidArrayCallIndexType(index_type.into_owned())))
@@ -1894,7 +1898,7 @@ impl<'a, M> Parser<'a, M> {
                                 });
 
                             while self.peek_is_not(Token::BracketClose) {
-                                let expr = self.read_expr(None, on_type, true, true, expected_type.map(|t| t.get_inner_type()), context)?;
+                                let expr = self.read_expr(None, on_type, true, true, None, expected_type.map(|t| t.get_inner_type()), context)?;
                                 match &array_type { // array values must have the same type
                                     Some(t) => {
                                         let _type = self.get_type_from_expression(on_type, &expr, context)?;
@@ -1935,7 +1939,7 @@ impl<'a, M> Parser<'a, M> {
                             Some(Type::Tuples(tuples)) => {
                                 let mut elements = Vec::with_capacity(tuples.len());
                                 for tu in tuples {
-                                    let expr = self.read_expr(Some(&Token::ParenthesisClose), None, true, true, Some(tu), context)?;
+                                    let expr = self.read_expr(Some(&Token::ParenthesisClose), None, true, true, None, Some(tu), context)?;
                                     elements.push(expr);
 
                                     if self.peek_is(Token::Comma) {
@@ -1947,14 +1951,14 @@ impl<'a, M> Parser<'a, M> {
                                 Expression::TuplesConstructor(elements)
                             },
                             _ => {
-                                let expr = self.read_expr(Some(&Token::ParenthesisClose), None, true, true, expected_type, context)?;
+                                let expr = self.read_expr(Some(&Token::ParenthesisClose), None, true, true, None, expected_type, context)?;
 
                                 // check if it's maybe a tuple
                                 if self.peek_is(Token::Comma) {
                                     let mut elements = vec![expr];
                                     while self.peek_is(Token::Comma) {
                                         self.expect_token(Token::Comma)?;
-                                        let expr = self.read_expr(Some(&Token::ParenthesisClose), None, true, true, expected_type, context)?;
+                                        let expr = self.read_expr(Some(&Token::ParenthesisClose), None, true, true, None, expected_type, context)?;
                                         elements.push(expr);
                                     }
                                     self.expect_token(Token::ParenthesisClose)?;
@@ -2019,7 +2023,7 @@ impl<'a, M> Parser<'a, M> {
                             // Read a range
                             if self.peek_is(Token::Dot) {
                                 self.expect_token(Token::Dot)?;
-                                let end_expr = self.read_expr(delimiter, Some(&prev_type), false, false, expected_type, context)?;
+                                let end_expr = self.read_expr(delimiter, Some(&prev_type), false, false, None, expected_type, context)?;
                                 let end_type = self.get_type_from_expression(on_type, &end_expr, context)?;
                                 if prev_type != *end_type {
                                     return Err(err!(self, ParserErrorKind::InvalidRangeType(prev_type, end_type.into_owned())))
@@ -2032,7 +2036,7 @@ impl<'a, M> Parser<'a, M> {
                                 Expression::RangeConstructor(Box::new(value), Box::new(end_expr))
                             } else {
                                 // Read a variable access OR a function call
-                                let right_expr = self.read_expr(delimiter, Some(&prev_type), false, false, expected_type, context)?;
+                                let right_expr = self.read_expr(delimiter, Some(&prev_type), false, false, None, expected_type, context)?;
                                 if let Expression::FunctionCall(path, name, params, ty) = right_expr {
                                     if path.is_some() {
                                         return Err(err!(self, ParserErrorKind::UnexpectedPathInFunctionCall))
@@ -2056,7 +2060,7 @@ impl<'a, M> Parser<'a, M> {
                     }
                     
                     // Read the expression that follows all the ! operators
-                    let expr = self.read_expr(delimiter, on_type, false, false, Some(&Type::Bool), context)?;
+                    let expr = self.read_expr(delimiter, on_type, false, false, Some(vec!(&Token::Dot)), Some(&Type::Bool), context)?;
                     let expr_type = self.get_type_from_expression(on_type, &expr, context)?;
                     if *expr_type != Type::Bool {
                         return Err(err!(self, ParserErrorKind::InvalidValueType(expr_type.into_owned(), Type::Bool)))
@@ -2091,11 +2095,11 @@ impl<'a, M> Parser<'a, M> {
                         return Err(err!(self, ParserErrorKind::InvalidCondition(Type::Bool, collapsed_expr)))
                     }
 
-                    let valid_expr = self.read_expr(Some(&Token::Colon), None, true, true, expected_type, context)?;
+                    let valid_expr = self.read_expr(Some(&Token::Colon), None, true, true, None, expected_type, context)?;
                     let first_type = self.get_type_from_expression(None, &valid_expr, context)?.into_owned();
 
                     self.expect_token(Token::Colon)?;
-                    let else_expr = self.read_expr(None, on_type, true, true, expected_type, context)?;
+                    let else_expr = self.read_expr(None, on_type, true, true, None, expected_type, context)?;
                     let else_type = self.get_type_from_expression(None, &else_expr, context)?;
                     
                     if !first_type.is_compatible_with(&else_type) { // both expr should have the SAME type.
@@ -2284,7 +2288,7 @@ impl<'a, M> Parser<'a, M> {
             Ok(Token::Dot) if matches!(self.peek_n(1), Ok(Token::Dot)) => {
                 self.expect_token(Token::Dot)?;
                 self.expect_token(Token::Dot)?;
-                let end_expr = self.read_expr(delimiter, None, false, true, expected_type, context)?;
+                let end_expr = self.read_expr(delimiter, None, false, true, None, expected_type, context)?;
                 let end_type = self.get_type_from_expression(None, &end_expr, context)?;
                 let start_expr = Expression::Variable(context.get_variable_id(id)
                     .ok_or_else(|| err!(self, ParserErrorKind::UnexpectedVariable(id)))?);
@@ -2455,7 +2459,7 @@ impl<'a, M> Parser<'a, M> {
 
         let mut expressions: Vec<(Expression, Expression)> = Vec::new();
         while self.peek_is_not(Token::BraceClose) {
-            let mut key = self.read_expr(Some(&Token::Colon), None, true, true, key_type.as_ref(), context)?;
+            let mut key = self.read_expr(Some(&Token::Colon), None, true, true, None, key_type.as_ref(), context)?;
             let expr_type = self.get_type_from_expression_internal(None, &key, context)?
                 .map(Cow::into_owned);
 
@@ -2466,7 +2470,7 @@ impl<'a, M> Parser<'a, M> {
             }
 
             self.expect_token(Token::Colon)?;
-            let mut value = self.read_expr(None, None, true, true, value_type.as_ref(), context)?;
+            let mut value = self.read_expr(None, None, true, true, None, value_type.as_ref(), context)?;
             let expr_type = self.get_type_from_expression_internal(None, &value, context)?
                 .map(Cow::into_owned);
 
@@ -2531,7 +2535,7 @@ impl<'a, M> Parser<'a, M> {
 
             let value = if self.peek_is(Token::OperatorAssign) {
                 self.expect_token(Token::OperatorAssign)?;
-                let expr = self.read_expr(None, None, true, true, Some(&value_type), context)?;
+                let expr = self.read_expr(None, None, true, true, None, Some(&value_type), context)?;
 
                 let expr_type = match self.get_type_from_expression_internal(None, &expr, context) {
                     Ok(opt_type) => match opt_type {
@@ -2564,7 +2568,7 @@ impl<'a, M> Parser<'a, M> {
             (value_type, value)
         } else {
             self.expect_token(Token::OperatorAssign)?;
-            let value = self.read_expr(None, None, true, true, None, context)?;
+            let value = self.read_expr(None, None, true, true, None, None, context)?;
             let value_type = self.get_type_from_expression(None, &value, context)?
                 .into_owned();
 
@@ -2663,7 +2667,7 @@ impl<'a, M> Parser<'a, M> {
         };
 
         self.expect_token(Token::OperatorAssign)?;
-        let value = self.read_expr(None, None, true, true, expected_type.as_ref(), context)?;
+        let value = self.read_expr(None, None, true, true, None, expected_type.as_ref(), context)?;
 
         let mut value_type = self.get_type_from_expression(None, &value, context)?
             .into_owned();
@@ -2930,7 +2934,7 @@ impl<'a, M> Parser<'a, M> {
                 }
                 Token::Return => {
                     let opt: Option<Expression> = if let Some(return_type) = return_type {
-                        let expr = self.read_expr(None, None, true, true, Some(return_type), context)?;
+                        let expr = self.read_expr(None, None, true, true, None, Some(return_type), context)?;
                         if let Some(expr_type) = self.get_type_from_expression_internal(None, &expr, context)? {
                             // Support the optional<T> by returning T
                             if !return_type.is_assign_compatible_with(&expr_type) {
